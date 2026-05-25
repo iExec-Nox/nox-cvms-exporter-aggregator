@@ -19,10 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = Config::load().map_err(|e| {
-        error!("Failed to load configuration: {e}");
-        e
-    })?;
+    let config = Config::load().inspect_err(|e| error!("Failed to load configuration: {e}"))?;
     debug!("Configuration loaded");
 
     Application::new(config).run().await?;
