@@ -52,7 +52,7 @@ jobs:
     needs: prepare
     uses: iExecBlockchainComputing/github-actions-workflows/.github/workflows/docker-build.yml@docker-build-v3.3.0
     with:
-      image-name: docker-regis.iex.ec/nox-cvm-exporter-aggregator
+      image-name: docker-regis.iex.ec/nox-cvms-exporter-aggregator
       image-tag: ${{ needs.prepare.outputs.image_tag }}
       dockerfile: Dockerfile
       context: .
