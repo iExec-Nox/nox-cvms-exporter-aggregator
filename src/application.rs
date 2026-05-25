@@ -1,7 +1,4 @@
-use axum::{
-    Router,
-    routing::get,
-};
+use axum::{Router, routing::get};
 use tokio::{net::TcpListener, signal};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, info, warn};
