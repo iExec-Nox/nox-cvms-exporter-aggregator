@@ -1,11 +1,7 @@
 use axum::{
-    Json, Router,
-    http::{StatusCode, Uri},
-    response::IntoResponse,
+    Router,
     routing::get,
 };
-use chrono::Utc;
-use serde_json::{Value, json};
 use tokio::{net::TcpListener, signal};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, info, warn};
@@ -46,10 +42,9 @@ impl Application {
             .allow_origin(tower_http::cors::Any);
 
         Router::new()
-            .route("/", get(Self::root))
-            .route("/health", get(Self::health_check))
-            .route("/sample", get(handlers::sample))
-            .fallback(Self::not_found)
+            .route("/", get(handlers::root))
+            .route("/health", get(handlers::health_check))
+            .fallback(handlers::not_found)
             .with_state(state)
             .layer(TraceLayer::new_for_http())
             .layer(cors)
@@ -69,27 +64,6 @@ impl Application {
             .await?;
 
         Ok(())
-    }
-
-    /// `GET /health` — returns `{"status":"ok"}`.
-    async fn health_check() -> Json<Value> {
-        Json(json!({"status": "ok"}))
-    }
-
-    /// `GET /` — returns service name and current UTC timestamp.
-    async fn root() -> Json<Value> {
-        Json(json!({
-            "service": "nox-cvms-exporter-aggregator",
-            "timestamp": Utc::now().to_rfc3339()
-        }))
-    }
-
-    /// Fallback handler for non-existing routes.
-    async fn not_found(uri: Uri) -> impl IntoResponse {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("Route not found {}", uri.path()) })),
-        )
     }
 
     /// Resolves when `SIGTERM` or `Ctrl+C` is received, triggering graceful shutdown.
