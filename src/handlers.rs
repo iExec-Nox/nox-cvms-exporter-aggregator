@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 /// - `timestamp`: Current UTC timestamp in RFC3339 format
 pub async fn root() -> Json<Value> {
     Json(json!({
-        "service": "nox-kms",
+        "service": "nox-cvms-exporter-aggregator",
         "timestamp": Utc::now().to_rfc3339()
     }))
 }
