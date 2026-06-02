@@ -33,8 +33,6 @@ impl Application {
         let cors = CorsLayer::new()
             .allow_methods([
                 axum::http::Method::GET,
-                axum::http::Method::POST,
-                axum::http::Method::OPTIONS,
             ])
             .allow_origin(tower_http::cors::Any);
 
