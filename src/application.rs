@@ -31,9 +31,7 @@ impl Application {
         debug!("Building application router");
 
         let cors = CorsLayer::new()
-            .allow_methods([
-                axum::http::Method::GET,
-            ])
+            .allow_methods([axum::http::Method::GET])
             .allow_origin(tower_http::cors::Any);
 
         Router::new()
