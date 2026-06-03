@@ -1,4 +1,4 @@
-use axum::{Router, routing::get};
+use axum::{Router, http::Method, routing::get};
 use tokio::{net::TcpListener, signal};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, info, warn};
@@ -31,7 +31,7 @@ impl Application {
         debug!("Building application router");
 
         let cors = CorsLayer::new()
-            .allow_methods([axum::http::Method::GET])
+            .allow_methods([Method::GET, Method::OPTIONS])
             .allow_origin(tower_http::cors::Any);
 
         Router::new()
