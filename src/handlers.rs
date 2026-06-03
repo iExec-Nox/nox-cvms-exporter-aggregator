@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 /// # Returns
 ///
 /// JSON response containing:
-/// - `service`: The service name ("nox-kms")
+/// - `service`: The service name ("nox-cvms-exporter-aggregator")
 /// - `timestamp`: Current UTC timestamp in RFC3339 format
 pub async fn root() -> Json<Value> {
     Json(json!({
