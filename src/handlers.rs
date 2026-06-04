@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use axum::Json;
 use axum::extract::State;
 use axum::http::{StatusCode, Uri};
@@ -9,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
 
@@ -114,25 +113,13 @@ pub async fn get_active_cvms(
         .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url));
     let results = futures::future::join_all(futures).await;
 
-    // 2. Merge groups by `app_id`, isolating per-exporter failures.
-    let mut groups: HashMap<String, CvmSummary> = HashMap::new();
+    // 2. Split successes from failures, isolating per-exporter errors.
+    let mut summaries = Vec::new();
     let mut failures = 0;
 
     for result in results {
         match result {
-            Ok(summaries) => {
-                for summary in summaries {
-                    groups
-                        .entry(summary.app_id.clone())
-                        .or_insert_with(|| CvmSummary {
-                            app_id: summary.app_id,
-                            name: summary.name,
-                            instances: Vec::new(),
-                        })
-                        .instances
-                        .extend(summary.instances);
-                }
-            }
+            Ok(exporter_summaries) => summaries.extend(exporter_summaries),
             Err(e) => {
                 failures += 1;
                 warn!("skipping exporter: {e}");
@@ -147,5 +134,6 @@ pub async fn get_active_cvms(
         ));
     }
 
-    Ok(Json(groups.into_values().collect()))
+    // 4. Merge the per-machine groups into a single list keyed by `app_id`.
+    Ok(Json(merge_cvms(summaries)))
 }
