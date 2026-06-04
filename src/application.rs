@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{Router, http::Method, routing::get};
 use tokio::{net::TcpListener, signal};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -10,6 +12,8 @@ use crate::handlers;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
+    /// Shared HTTP client used to query the per-machine exporters in parallel.
+    pub http_client: reqwest::Client,
 }
 
 /// Top-level application builder and entry point.
@@ -47,8 +51,14 @@ impl Application {
     /// Initialises all dependencies and runs the HTTP server until a shutdown signal.
     pub async fn run(self) -> anyhow::Result<()> {
         let address = self.config.bind_addr();
+
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(self.config.request_timeout_secs))
+            .build()?;
+
         let state = AppState {
             config: self.config,
+            http_client,
         };
 
         info!("Starting nox-cvms-exporter-aggregator on {address}");
