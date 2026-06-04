@@ -3,7 +3,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::application::AppState;
@@ -49,14 +49,14 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
     )
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CvmInstance {
     pub instance_id: String,
     pub url: String,
     pub machine_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CvmSummary {
     pub app_id: String,
     pub name: String,
