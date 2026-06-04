@@ -1,8 +1,13 @@
 use axum::Json;
+use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
+use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::application::AppState;
+use crate::error::AppError;
 
 /// Root endpoint handler.
 ///
@@ -42,4 +47,25 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(json!({ "error":format!("Route not found {}", uri.path()) })),
     )
+}
+
+#[derive(Debug, Serialize)]
+pub struct CvmInstance {
+    pub instance_id: String,
+    pub url: String,
+    pub machine_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CvmSummary {
+    pub app_id: String,
+    pub name: String,
+    pub instances: Vec<CvmInstance>,
+}
+
+/// `GET /cvms` — returns active CVMs grouped by app.
+pub async fn get_active_cvms(
+    State(_state): State<AppState>,
+) -> Result<Json<Vec<CvmSummary>>, AppError> {
+    Ok(Json(vec![]))
 }

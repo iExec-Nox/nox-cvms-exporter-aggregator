@@ -37,6 +37,7 @@ impl Application {
         Router::new()
             .route("/", get(handlers::root))
             .route("/health", get(handlers::health_check))
+            .route("/cvms", get(handlers::get_active_cvms))
             .fallback(handlers::not_found)
             .with_state(state)
             .layer(TraceLayer::new_for_http())
