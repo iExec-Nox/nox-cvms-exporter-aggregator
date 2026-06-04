@@ -63,6 +63,37 @@ pub struct CvmSummary {
     pub instances: Vec<CvmInstance>,
 }
 
+/// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.
+///
+/// Returns the exporter's per-machine CVM groups on success, or a human-readable
+/// error string (prefixed with the exporter URL) so the caller can isolate a
+/// single unreachable/failing exporter without aborting the whole aggregation.
+#[allow(dead_code)]
+async fn fetch_exporter_cvms(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<Vec<CvmSummary>, String> {
+    let url = format!("{}/cvms", base_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("{base_url}: failed to reach exporter: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "{base_url}: exporter returned status {}",
+            response.status()
+        ));
+    }
+
+    response
+        .json::<Vec<CvmSummary>>()
+        .await
+        .map_err(|e| format!("{base_url}: failed to parse exporter response: {e}"))
+}
+
 /// `GET /cvms` — returns active CVMs grouped by app.
 pub async fn get_active_cvms(
     State(_state): State<AppState>,
