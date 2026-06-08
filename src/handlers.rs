@@ -128,6 +128,9 @@ pub async fn get_active_cvms(
     }
 
     // 3. Fail only when no exporter answered at all.
+    // The `failures > 0` guard is intentional: if `exporters` is empty,
+    // `failures == exporters.len()` would be `0 == 0` (true) and incorrectly
+    // return an error. Do not remove it as "redundant".
     if failures > 0 && failures == state.config.exporters.len() {
         return Err(AppError::Internal(
             "all configured exporters failed".to_owned(),
