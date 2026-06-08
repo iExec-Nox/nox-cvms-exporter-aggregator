@@ -3,13 +3,13 @@ use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
+use crate::types::CvmSummary;
 
 /// Root endpoint handler.
 ///
@@ -49,20 +49,6 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(json!({ "error":format!("Route not found {}", uri.path()) })),
     )
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmInstance {
-    pub instance_id: String,
-    pub url: String,
-    pub machine_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmSummary {
-    pub app_id: String,
-    pub name: String,
-    pub instances: Vec<CvmInstance>,
 }
 
 /// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.

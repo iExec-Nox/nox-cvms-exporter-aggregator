@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::handlers::CvmSummary;
+use crate::types::CvmSummary;
 
 /// Merges CVM groups collected from several exporters into a single list keyed
 /// by `app_id`, concatenating the instances of every group sharing the same
@@ -27,7 +27,7 @@ pub fn merge_cvms(summaries: impl IntoIterator<Item = CvmSummary>) -> Vec<CvmSum
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handlers::CvmInstance;
+    use crate::types::CvmInstance;
 
     /// Builds an instance whose fields encode the exporter it came from, so tests
     /// can assert that instances were carried over from the right machine.
