@@ -1,8 +1,15 @@
 use axum::Json;
+use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use serde_json::{Value, json};
+use tracing::warn;
+
+use crate::aggregation::merge_cvms;
+use crate::application::AppState;
+use crate::error::AppError;
+use crate::types::CvmSummary;
 
 /// Root endpoint handler.
 ///
@@ -42,4 +49,80 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(json!({ "error":format!("Route not found {}", uri.path()) })),
     )
+}
+
+/// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.
+///
+/// Returns the exporter's per-machine CVM groups on success, or a human-readable
+/// error string (prefixed with the exporter URL) so the caller can isolate a
+/// single unreachable/failing exporter without aborting the whole aggregation.
+async fn fetch_exporter_cvms(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<Vec<CvmSummary>, String> {
+    let url = format!("{}/cvms", base_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("{base_url}: failed to reach exporter: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "{base_url}: exporter returned status {}",
+            response.status()
+        ));
+    }
+
+    response
+        .json::<Vec<CvmSummary>>()
+        .await
+        .map_err(|e| format!("{base_url}: failed to parse exporter response: {e}"))
+}
+
+/// `GET /cvms` — returns active CVMs across all configured exporters, grouped by app.
+///
+/// Queries every configured exporter's `/cvms` endpoint in parallel, then merges
+/// the per-machine groups into a single list keyed by `app_id` (concatenating the
+/// instances of any group sharing the same `app_id`). Unreachable or failing
+/// exporters are logged and skipped so a single faulty machine does not abort the
+/// whole aggregation; the request only fails if *every* exporter fails.
+pub async fn get_active_cvms(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<CvmSummary>>, AppError> {
+    // 1. Query every exporter concurrently — we need all responses, not the first.
+    let futures = state
+        .config
+        .exporters
+        .iter()
+        .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url));
+    let results = futures::future::join_all(futures).await;
+
+    // 2. Split successes from failures, isolating per-exporter errors.
+    let mut summaries = Vec::new();
+    let mut failures = 0;
+
+    for result in results {
+        match result {
+            Ok(exporter_summaries) => summaries.extend(exporter_summaries),
+            Err(e) => {
+                failures += 1;
+                warn!("skipping exporter: {e}");
+            }
+        }
+    }
+
+    // 3. Fail only when no exporter answered at all.
+    // The `failures > 0` guard is intentional: if `exporters` is empty,
+    // `failures == exporters.len()` would be `0 == 0` (true) and incorrectly
+    // return an error. Do not remove it as "redundant".
+    if failures > 0 && failures == state.config.exporters.len() {
+        return Err(AppError::Internal(
+            "all configured exporters failed".to_owned(),
+        ));
+    }
+
+    // 4. Merge the per-machine groups into a single list keyed by `app_id`.
+    Ok(Json(merge_cvms(summaries)))
 }

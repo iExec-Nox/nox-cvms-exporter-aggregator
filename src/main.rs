@@ -1,7 +1,9 @@
+pub mod aggregation;
 pub mod application;
 pub mod config;
 pub mod error;
 pub mod handlers;
+pub mod types;
 
 use tracing::{debug, error};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

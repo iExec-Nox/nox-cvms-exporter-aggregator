@@ -10,6 +10,11 @@ use tracing::debug;
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
+    /// Base URLs of the per-machine `nox-cvms-exporter` instances to query
+    /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list.
+    pub exporters: Vec<String>,
+    /// Per-request timeout, in seconds, when querying a machine exporter.
+    pub request_timeout_secs: u64,
 }
 
 /// HTTP server binding configuration.
@@ -28,10 +33,15 @@ impl Config {
         let config = ConfigBuilder::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 8080)?
+            .set_default("exporters", Vec::<String>::new())?
+            .set_default("request_timeout_secs", 10)?
             .add_source(
                 Environment::with_prefix("NOX_CVMS_EXPORTER_AGGREGATOR")
                     .prefix_separator("_")
-                    .separator("__"),
+                    .separator("__")
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("exporters"),
             )
             .build()?;
 
