@@ -17,17 +17,16 @@ pub struct CvmSummary {
     pub instances: Vec<CvmInstance>,
 }
 
-/// Response of an exporter's `/quote?data=<challenge>` endpoint.
+/// Attestation data extracted from an exporter's `/quote?data=<challenge>`
+/// endpoint and forwarded to the UI.
 ///
-/// Forwarded as-is to the UI (same shape the UI used to fetch directly from the
-/// CVM): the verifier needs `quote` for the DCAP signature check and `event_log`
-/// for the RTMR3 replay.
+/// Only the two fields the verifier actually uses are kept: `quote` (DCAP
+/// signature check) and `event_log` (RTMR3 replay). The exporter also returns
+/// `rtmrs` and `vm_config`, but the UI ignores them, so serde drops them.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuoteResponse {
     pub quote: String,
     pub event_log: String,
-    pub rtmrs: String,
-    pub vm_config: String,
 }
 
 /// Partial view of an exporter's `/info` response — only the fields we need.

@@ -417,8 +417,6 @@ mod tests {
             quote: QuoteResponse {
                 quote: "q".to_owned(),
                 event_log: "[]".to_owned(),
-                rtmrs: "{}".to_owned(),
-                vm_config: "{}".to_owned(),
             },
             app_compose: "compose-yaml".to_owned(),
         };
