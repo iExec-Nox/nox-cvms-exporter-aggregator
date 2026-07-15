@@ -250,23 +250,183 @@ pub async fn get_active_cvms(
     //    whole response.
     let client = &state.http_client;
     let challenge = &challenge;
-    let ui_summaries =
-        futures::future::join_all(merged.into_iter().map(|summary| async move {
-            let instances = futures::future::join_all(
-                summary
-                    .instances
-                    .into_iter()
-                    .map(|instance| enrich_instance(client, challenge, instance)),
-            )
-            .await;
-
-            CvmSummaryForUI {
-                app_id: summary.app_id,
-                name: summary.name,
-                instances: instances.into_iter().flatten().collect(),
-            }
-        }))
+    let ui_summaries = futures::future::join_all(merged.into_iter().map(|summary| async move {
+        let instances = futures::future::join_all(
+            summary
+                .instances
+                .into_iter()
+                .map(|instance| enrich_instance(client, challenge, instance)),
+        )
         .await;
 
+        CvmSummaryForUI {
+            app_id: summary.app_id,
+            name: summary.name,
+            instances: instances.into_iter().flatten().collect(),
+        }
+    }))
+    .await;
+
     Ok(Json(ui_summaries))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A minimal but realistic `/quote` payload (field shapes match a real CVM).
+    fn quote_body() -> Value {
+        json!({
+            "quote": "0400020081000000deadbeef",
+            "event_log": "[{\"imr\":0}]",
+            "rtmrs": "{0: \"aa\"}",
+            "vm_config": "{\"cpu_count\":2}"
+        })
+    }
+
+    /// A `/info` payload shaped like a real exporter response: the manifest is
+    /// nested under `tcb_info.app_compose`, surrounded by fields we ignore.
+    fn info_body(app_compose: &str) -> Value {
+        json!({
+            "app_id": "8327d735",
+            "app_name": "nox-kms",
+            "compose_hash": "ad08c205",
+            "os_image_hash": "bd369a8c",
+            "vm_config": "{\"cpu_count\":2}",
+            "tcb_info": {
+                "app_compose": app_compose,
+                "compose_hash": "ad08c205",
+                "os_image_hash": "bd369a8c"
+            }
+        })
+    }
+
+    async fn mount_quote(server: &MockServer, challenge: &str) {
+        Mock::given(method("GET"))
+            .and(path("/quote"))
+            .and(query_param("data", challenge))
+            .respond_with(ResponseTemplate::new(200).set_body_json(quote_body()))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_info(server: &MockServer, app_compose: &str) {
+        Mock::given(method("GET"))
+            .and(path("/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(info_body(app_compose)))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn fetch_app_info_extracts_nested_app_compose() {
+        let server = MockServer::start().await;
+        mount_info(&server, "services:\n  kms:").await;
+
+        let out = fetch_app_info(&reqwest::Client::new(), &server.uri())
+            .await
+            .unwrap();
+
+        assert_eq!(out, "services:\n  kms:");
+    }
+
+    #[tokio::test]
+    async fn fetch_quote_binds_challenge_and_parses_payload() {
+        let server = MockServer::start().await;
+        // The mock only matches when `data=<challenge>` is present, so the test
+        // fails if the challenge is not forwarded as the query parameter.
+        mount_quote(&server, "nonce-123").await;
+
+        let quote = fetch_quote(&reqwest::Client::new(), &server.uri(), "nonce-123")
+            .await
+            .unwrap();
+
+        assert_eq!(quote.quote, "0400020081000000deadbeef");
+        assert_eq!(quote.event_log, "[{\"imr\":0}]");
+    }
+
+    #[tokio::test]
+    async fn fetch_quote_errors_on_non_success_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/quote"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let err = fetch_quote(&reqwest::Client::new(), &server.uri(), "abc")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("status 500"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn enrich_instance_maps_quote_and_compose() {
+        let server = MockServer::start().await;
+        mount_quote(&server, "abc").await;
+        mount_info(&server, "compose-yaml").await;
+
+        let instance = CvmInstance {
+            instance_id: "i1".to_owned(),
+            url: server.uri(),
+            machine_id: "m1".to_owned(),
+        };
+
+        let ui = enrich_instance(&reqwest::Client::new(), "abc", instance)
+            .await
+            .expect("instance should be enriched");
+
+        assert_eq!(ui.instance_id, "i1");
+        assert_eq!(ui.machine_id, "m1");
+        assert_eq!(ui.app_compose, "compose-yaml");
+        assert_eq!(ui.quote.event_log, "[{\"imr\":0}]");
+    }
+
+    #[tokio::test]
+    async fn enrich_instance_dropped_when_quote_fetch_fails() {
+        let server = MockServer::start().await;
+        // /info succeeds but /quote fails → the whole instance must be dropped.
+        mount_info(&server, "compose-yaml").await;
+        Mock::given(method("GET"))
+            .and(path("/quote"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let instance = CvmInstance {
+            instance_id: "i1".to_owned(),
+            url: server.uri(),
+            machine_id: "m1".to_owned(),
+        };
+
+        assert!(
+            enrich_instance(&reqwest::Client::new(), "abc", instance)
+                .await
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ui_instance_serialization_replaces_url_with_quote_and_compose() {
+        let ui = CvmInstanceForUI {
+            instance_id: "i1".to_owned(),
+            machine_id: "m1".to_owned(),
+            quote: QuoteResponse {
+                quote: "q".to_owned(),
+                event_log: "[]".to_owned(),
+                rtmrs: "{}".to_owned(),
+                vm_config: "{}".to_owned(),
+            },
+            app_compose: "compose-yaml".to_owned(),
+        };
+
+        let value = serde_json::to_value(&ui).unwrap();
+
+        assert!(value.get("url").is_none(), "url must not leak to the UI");
+        assert!(value.get("quote").is_some());
+        assert!(value.get("app_compose").is_some());
+    }
 }
