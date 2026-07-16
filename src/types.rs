@@ -23,7 +23,7 @@ pub struct CvmSummary {
 /// Only the two fields the verifier actually uses are kept: `quote` (DCAP
 /// signature check) and `event_log` (RTMR3 replay). The exporter also returns
 /// `rtmrs` and `vm_config`, but the UI ignores them, so serde drops them.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct QuoteResponse {
     pub quote: String,
     pub event_log: String,
@@ -48,7 +48,7 @@ pub struct TcbInfo {
 // carry the attestation data fetched by the aggregator instead of the raw CVM
 // `url`, so the UI never contacts the CVMs directly.
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize)]
 pub struct EnrichedCvmInstance {
     pub instance_id: String,
     pub machine_id: String,
@@ -58,7 +58,7 @@ pub struct EnrichedCvmInstance {
     pub app_compose: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize)]
 pub struct EnrichedCvmSummary {
     pub app_id: String,
     pub name: String,
