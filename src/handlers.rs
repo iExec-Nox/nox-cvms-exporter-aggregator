@@ -11,7 +11,7 @@ use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
 use crate::types::{
-    CvmInstance, CvmInstanceForUI, CvmSummary, CvmSummaryForUI, ExporterInfo, QuoteResponse,
+    CvmInstance, CvmSummary, EnrichedCvmInstance, EnrichedCvmSummary, ExporterInfo, QuoteResponse,
 };
 
 /// Query parameters accepted by `GET /cvms`.
@@ -159,14 +159,14 @@ async fn enrich_instance(
     client: &reqwest::Client,
     challenge: &str,
     instance: CvmInstance,
-) -> Option<CvmInstanceForUI> {
+) -> Option<EnrichedCvmInstance> {
     let (quote, app_compose) = tokio::join!(
         fetch_quote(client, &instance.url, challenge),
         fetch_app_info(client, &instance.url),
     );
 
     match (quote, app_compose) {
-        (Ok(quote), Ok(app_compose)) => Some(CvmInstanceForUI {
+        (Ok(quote), Ok(app_compose)) => Some(EnrichedCvmInstance {
             instance_id: instance.instance_id,
             machine_id: instance.machine_id,
             quote,
@@ -199,7 +199,7 @@ async fn enrich_instance(
 pub async fn get_active_cvms(
     State(state): State<AppState>,
     Query(query): Query<CvmsQuery>,
-) -> Result<Json<Vec<CvmSummaryForUI>>, AppError> {
+) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
     // 0. A challenge (verifier nonce) is mandatory: it is relayed to each CVM's
     //    /quote endpoint so the returned quote is bound to the UI's nonce.
     let challenge = query
@@ -259,7 +259,7 @@ pub async fn get_active_cvms(
         )
         .await;
 
-        CvmSummaryForUI {
+        EnrichedCvmSummary {
             app_id: summary.app_id,
             name: summary.name,
             instances: instances.into_iter().flatten().collect(),
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn ui_instance_serialization_replaces_url_with_quote_and_compose() {
-        let ui = CvmInstanceForUI {
+        let ui = EnrichedCvmInstance {
             instance_id: "i1".to_owned(),
             machine_id: "m1".to_owned(),
             quote: QuoteResponse {

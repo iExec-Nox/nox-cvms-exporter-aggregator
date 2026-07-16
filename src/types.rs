@@ -49,7 +49,7 @@ pub struct TcbInfo {
 // `url`, so the UI never contacts the CVMs directly.
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmInstanceForUI {
+pub struct EnrichedCvmInstance {
     pub instance_id: String,
     pub machine_id: String,
     /// Full `/quote` payload fetched by the aggregator for the UI's challenge.
@@ -59,8 +59,8 @@ pub struct CvmInstanceForUI {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmSummaryForUI {
+pub struct EnrichedCvmSummary {
     pub app_id: String,
     pub name: String,
-    pub instances: Vec<CvmInstanceForUI>,
+    pub instances: Vec<EnrichedCvmInstance>,
 }
