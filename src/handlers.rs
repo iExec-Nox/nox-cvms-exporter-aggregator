@@ -249,7 +249,7 @@ pub async fn get_active_cvms(
     //    whose fetch fails are dropped so one unreachable CVM does not abort the
     //    whole response.
     let client = &state.http_client;
-    let challenge = &challenge;
+    let challenge = challenge.as_str();
     let ui_summaries = futures::future::join_all(merged.into_iter().map(|summary| async move {
         let instances = futures::future::join_all(
             summary
