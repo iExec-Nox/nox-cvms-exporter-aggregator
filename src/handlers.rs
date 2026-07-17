@@ -3,6 +3,7 @@ use axum::extract::{Query, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
+use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::warn;
@@ -241,31 +242,49 @@ pub async fn get_active_cvms(
         ));
     }
 
-    // 4. Merge the per-machine groups into a single list keyed by `app_id`.
-    let merged = merge_cvms(summaries);
-
-    // 5. Enrich every instance with its quote (bound to `challenge`) and compose
-    //    manifest, fetched concurrently across all apps and instances. Instances
-    //    whose fetch fails are dropped so one unreachable CVM does not abort the
-    //    whole response.
+    // 4. Flatten every instance (carrying its app_id/name) into a single work list.
+    //    No pre-merge here: the final regroup (step 6) subsumes the cross-exporter
+    //    merge, so merging now would only be undone by the flatten.
     let client = &state.http_client;
     let challenge = challenge.as_str();
-    let ui_summaries = futures::future::join_all(merged.into_iter().map(|summary| async move {
-        let instances = futures::future::join_all(
-            summary
-                .instances
-                .into_iter()
-                .map(|instance| enrich_instance(client, challenge, instance)),
-        )
-        .await;
+    let max_inflight = state.config.max_inflight;
+    let flat = summaries.into_iter().flat_map(|summary| {
+        let app_id = summary.app_id;
+        let name = summary.name;
+        summary
+            .instances
+            .into_iter()
+            .map(move |instance| (app_id.clone(), name.clone(), instance))
+    });
 
-        EnrichedCvmSummary {
-            app_id: summary.app_id,
-            name: summary.name,
-            instances: instances.into_iter().flatten().collect(),
-        }
-    }))
-    .await;
+    // 5. Enrich instances with a bounded number of concurrent fetches
+    //    (`max_inflight`, from config) rather than firing everything at once.
+    //    Instances whose quote/info fetch fails are dropped inside `enrich_instance`.
+    let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(flat)
+        .map(|(app_id, name, instance)| async move {
+            enrich_instance(client, challenge, instance)
+                .await
+                .map(|ui| (app_id, name, ui))
+        })
+        .buffer_unordered(max_inflight)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+
+    // 6. Regroup by `app_id` — this fold is also the cross-exporter merge, now on
+    //    the enriched type.
+    let ui_summaries =
+        merge_cvms(
+            enriched
+                .into_iter()
+                .map(|(app_id, name, ui)| EnrichedCvmSummary {
+                    app_id,
+                    name,
+                    instances: vec![ui],
+                }),
+        );
 
     Ok(Json(ui_summaries))
 }
