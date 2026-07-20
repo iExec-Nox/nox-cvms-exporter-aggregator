@@ -12,6 +12,9 @@ use thiserror::Error;
 /// automatically — prefer adding a new `#[from]` variant over calling `map_err`.
 #[derive(Debug, Error)]
 pub enum AppError {
+    /// 400 — malformed or missing request input (e.g. absent `challenge`).
+    #[error("Bad request: {0}")]
+    BadRequest(String),
     /// 404 — target resource does not exist.
     #[error("Not found: {0}")]
     NotFound(String),
@@ -26,6 +29,7 @@ pub enum AppError {
 impl AppError {
     fn error_code(&self) -> &'static str {
         match self {
+            AppError::BadRequest(_) => "bad_request",
             AppError::NotFound(_) => "not_found",
             AppError::Internal(_) => "internal",
             AppError::Serialization(_) => "serialization",
@@ -34,6 +38,7 @@ impl AppError {
 
     fn status_code(&self) -> StatusCode {
         match self {
+            AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,

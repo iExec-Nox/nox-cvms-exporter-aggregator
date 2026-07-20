@@ -6,7 +6,9 @@ A lightweight Rust HTTP API (Axum) that aggregates the active Confidential VMs (
 
 Each machine runs its own `nox-cvms-exporter`, which exposes the CVMs active on that machine via `GET /cvms`. When a deployment spans multiple machines, querying each exporter individually is tedious and gives a per-machine view only.
 
-`nox-cvms-exporter-aggregator` queries the `/cvms` endpoint of every configured exporter **in parallel**, then merges the results: groups sharing the same `app_id` are combined into a single entry whose `instances` list concatenates the instances reported by every machine. The response format is the same as a single exporter's, so clients see one unified, cluster-wide view of the active CVMs.
+`nox-cvms-exporter-aggregator` queries the `/cvms` endpoint of every configured exporter **in parallel**, then merges the results: groups sharing the same `app_id` are combined into a single entry whose `instances` list concatenates the instances reported by every machine.
+
+For each merged instance, the aggregator then fetches the attestation **quote** (bound to a caller-supplied `challenge`) and the **compose manifest** directly from the CVM, and embeds them in the response. As a result, the client (the attestation UI) gets everything it needs to verify a CVM from this single call and never contacts the CVMs directly — the internal CVM `url` is not exposed.
 
 ```
                           ┌──────────────────────────┐
@@ -27,11 +29,19 @@ Each machine runs its own `nox-cvms-exporter`, which exposes the CVMs active on 
 |--------|------|-------------|
 | `GET` | `/` | Service name and current UTC timestamp |
 | `GET` | `/health` | Liveness probe — returns `{"status":"ok"}` |
-| `GET` | `/cvms` | Aggregated active CVMs across all exporters |
+| `GET` | `/cvms?challenge=<nonce>` | Aggregated active CVMs across all exporters, with each instance's quote and compose manifest embedded |
 
 ### `GET /cvms`
 
-Queries every configured exporter concurrently and returns their active CVMs merged by application. For a given `app_id`, the instances reported by all machines are concatenated into a single entry.
+Queries every configured exporter concurrently and returns their active CVMs merged by application. For a given `app_id`, the instances reported by all machines are concatenated into a single entry. Each instance is then enriched with the attestation data fetched from the CVM.
+
+**Query parameters**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `challenge` | yes | Verifier nonce, relayed to each CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
+
+For every merged instance the aggregator fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.
 
 **Response**
 
@@ -43,13 +53,12 @@ Queries every configured exporter concurrently and returns their active CVMs mer
     "instances": [
       {
         "instance_id": "i-0abc123",
-        "url": "https://i-0abc123-9999.apps.my-domain.example.com",
-        "machine_id": "machine-a"
-      },
-      {
-        "instance_id": "i-0def456",
-        "url": "https://i-0def456-9999.apps.my-domain.example.com",
-        "machine_id": "machine-b"
+        "machine_id": "machine-a",
+        "quote": {
+          "quote": "0400020081...",
+          "event_log": "[{\"imr\":0,...}]"
+        },
+        "app_compose": "{\n  \"manifest_version\": 2,\n  ...\n}"
       }
     ]
   }
@@ -60,6 +69,7 @@ Queries every configured exporter concurrently and returns their active CVMs mer
 
 - An exporter that is unreachable, returns a non-success status, or sends an unparseable body is logged and **skipped** — a single faulty machine does not break the aggregation.
 - The request fails with `500 Internal Server Error` only when **every** configured exporter fails.
+- An instance whose quote or info fetch fails is logged and **dropped** from the response, so one unreachable CVM does not abort the whole call.
 
 ## Configuration
 

@@ -1,18 +1,24 @@
 use std::collections::HashMap;
 
-use crate::types::CvmSummary;
+use crate::types::EnrichedCvmSummary;
 
-/// Merges CVM groups collected from several exporters into a single list keyed
-/// by `app_id`, concatenating the instances of every group sharing the same
-/// `app_id`. For a given `app_id`, the `name` of the first group encountered is
-/// kept. Output ordering is unspecified.
-pub fn merge_cvms(summaries: impl IntoIterator<Item = CvmSummary>) -> Vec<CvmSummary> {
-    let mut groups: HashMap<String, CvmSummary> = HashMap::new();
+/// Merges enriched CVM groups into a single list keyed by `app_id`, concatenating
+/// the instances of every group sharing the same `app_id`. For a given `app_id`,
+/// the `name` of the first group encountered is kept. Output ordering is
+/// unspecified.
+///
+/// Called after enrichment: each input group typically holds a single instance
+/// (one per `(exporter, instance)` pair), and this fold regroups them by app —
+/// which is also where the cross-exporter merge happens.
+pub fn merge_cvms(
+    summaries: impl IntoIterator<Item = EnrichedCvmSummary>,
+) -> Vec<EnrichedCvmSummary> {
+    let mut groups: HashMap<String, EnrichedCvmSummary> = HashMap::new();
 
     for summary in summaries {
         groups
             .entry(summary.app_id.clone())
-            .or_insert_with(|| CvmSummary {
+            .or_insert_with(|| EnrichedCvmSummary {
                 app_id: summary.app_id,
                 name: summary.name,
                 instances: Vec::new(),
@@ -27,20 +33,28 @@ pub fn merge_cvms(summaries: impl IntoIterator<Item = CvmSummary>) -> Vec<CvmSum
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CvmInstance;
+    use crate::types::{EnrichedCvmInstance, QuoteResponse};
 
-    /// Builds an instance whose fields encode the exporter it came from, so tests
-    /// can assert that instances were carried over from the right machine.
-    fn instance(id: &str, machine: &str) -> CvmInstance {
-        CvmInstance {
+    /// Builds an enriched instance; only the ids matter for these grouping tests,
+    /// so the quote/compose fields are left empty.
+    fn instance(id: &str, machine: &str) -> EnrichedCvmInstance {
+        EnrichedCvmInstance {
             instance_id: id.to_owned(),
-            url: format!("https://{id}.example"),
             machine_id: machine.to_owned(),
+            quote: QuoteResponse {
+                quote: String::new(),
+                event_log: String::new(),
+            },
+            app_compose: String::new(),
         }
     }
 
-    fn summary(app_id: &str, name: &str, instances: Vec<CvmInstance>) -> CvmSummary {
-        CvmSummary {
+    fn summary(
+        app_id: &str,
+        name: &str,
+        instances: Vec<EnrichedCvmInstance>,
+    ) -> EnrichedCvmSummary {
+        EnrichedCvmSummary {
             app_id: app_id.to_owned(),
             name: name.to_owned(),
             instances,
@@ -48,11 +62,23 @@ mod tests {
     }
 
     /// Looks up the merged group for `app_id`, failing the test if it is missing.
-    fn group<'a>(merged: &'a [CvmSummary], app_id: &str) -> &'a CvmSummary {
+    fn group<'a>(merged: &'a [EnrichedCvmSummary], app_id: &str) -> &'a EnrichedCvmSummary {
         merged
             .iter()
             .find(|s| s.app_id == app_id)
             .unwrap_or_else(|| panic!("expected a group for app_id {app_id}"))
+    }
+
+    /// Projects a group's instances to sorted `(instance_id, machine_id)` pairs,
+    /// so tests can assert membership without needing `PartialEq` on the struct.
+    fn instance_keys(s: &EnrichedCvmSummary) -> Vec<(&str, &str)> {
+        let mut keys: Vec<(&str, &str)> = s
+            .instances
+            .iter()
+            .map(|i| (i.instance_id.as_str(), i.machine_id.as_str()))
+            .collect();
+        keys.sort_unstable();
+        keys
     }
 
     #[test]
@@ -65,12 +91,12 @@ mod tests {
 
         assert_eq!(merged.len(), 2);
         assert_eq!(
-            group(&merged, "app-1").instances,
-            vec![instance("i1", "machine-a")]
+            instance_keys(group(&merged, "app-1")),
+            vec![("i1", "machine-a")]
         );
         assert_eq!(
-            group(&merged, "app-2").instances,
-            vec![instance("i2", "machine-b")]
+            instance_keys(group(&merged, "app-2")),
+            vec![("i2", "machine-b")]
         );
     }
 
@@ -86,14 +112,13 @@ mod tests {
         assert_eq!(merged.len(), 1);
         let app = group(&merged, "app-1");
         assert_eq!(app.name, "alpha");
-        assert_eq!(app.instances.len(), 3);
-
-        let mut machines: Vec<&str> = app
-            .instances
-            .iter()
-            .map(|i| i.machine_id.as_str())
-            .collect();
-        machines.sort_unstable();
-        assert_eq!(machines, vec!["machine-a", "machine-b", "machine-c"]);
+        assert_eq!(
+            instance_keys(app),
+            vec![
+                ("i1", "machine-a"),
+                ("i2", "machine-b"),
+                ("i3", "machine-c")
+            ]
+        );
     }
 }

@@ -15,6 +15,9 @@ pub struct Config {
     pub exporters: Vec<String>,
     /// Per-request timeout, in seconds, when querying a machine exporter.
     pub request_timeout_secs: u64,
+    /// Max instances enriched concurrently on `GET /cvms` (each enrichment issues
+    /// two requests: `/quote` + `/info`). Bounds the load on the CVM nodes.
+    pub max_inflight: usize,
 }
 
 /// HTTP server binding configuration.
@@ -35,6 +38,7 @@ impl Config {
             .set_default("server.port", 8080)?
             .set_default("exporters", Vec::<String>::new())?
             .set_default("request_timeout_secs", 10)?
+            .set_default("max_inflight", 2)?
             .add_source(
                 Environment::with_prefix("NOX_CVMS_EXPORTER_AGGREGATOR")
                     .prefix_separator("_")
