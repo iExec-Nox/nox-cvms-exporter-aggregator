@@ -9,12 +9,20 @@ pub struct CvmInstance {
     pub machine_id: String,
 }
 
+/// A per-app CVM group: the instances of one application, keyed by `app_id`.
+///
+/// Generic over the instance type so the same shape — and the same `app_id`
+/// merge (`merge_cvms`) — serves both the plain listing (`CvmInstance`) and the
+/// enriched attestation response (`EnrichedCvmInstance`).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmSummary {
+pub struct Summary<I> {
     pub app_id: String,
     pub name: String,
-    pub instances: Vec<CvmInstance>,
+    pub instances: Vec<I>,
 }
+
+/// Per-app grouping of plain (un-enriched) instances — the `GET /cvms` listing.
+pub type CvmSummary = Summary<CvmInstance>;
 
 /// Attestation data extracted from an exporter's `/quote?data=<challenge>`
 /// endpoint and forwarded to the UI.
@@ -86,9 +94,5 @@ pub struct EnrichedCvmInstance {
     pub app_compose: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct EnrichedCvmSummary {
-    pub app_id: String,
-    pub name: String,
-    pub instances: Vec<EnrichedCvmInstance>,
-}
+/// Per-app grouping of enriched instances — the `POST /cvms/attestations` response.
+pub type EnrichedCvmSummary = Summary<EnrichedCvmInstance>;
