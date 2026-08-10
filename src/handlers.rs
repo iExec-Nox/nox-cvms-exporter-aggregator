@@ -63,6 +63,15 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
     )
 }
 
+/// Rebuilds a CVM's base URL from its instance id and the per-machine routing
+/// config: `https://<instance_id>-<quote_service_port>.<suffixe_url>`.
+///
+/// The exporter no longer exposes the URL; the aggregator owns URL construction,
+/// keeping the internal CVM address out of both the exporter response and the UI.
+fn build_cvm_url(instance_id: &str, quote_service_port: u16, suffixe_url: &str) -> String {
+    format!("https://{instance_id}-{quote_service_port}.{suffixe_url}")
+}
+
 /// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.
 ///
 /// Returns the exporter's per-machine CVM groups on success, or a human-readable
@@ -159,11 +168,12 @@ async fn fetch_app_info(client: &reqwest::Client, base_url: &str) -> Result<Stri
 async fn enrich_instance(
     client: &reqwest::Client,
     challenge: &str,
+    base_url: &str,
     instance: CvmInstance,
 ) -> Option<EnrichedCvmInstance> {
     let (quote, app_compose) = tokio::join!(
-        fetch_quote(client, &instance.url, challenge),
-        fetch_app_info(client, &instance.url),
+        fetch_quote(client, base_url, challenge),
+        fetch_app_info(client, base_url),
     );
 
     match (quote, app_compose) {
@@ -242,12 +252,17 @@ pub async fn get_active_cvms(
         ));
     }
 
-    // 4. Flatten every instance (carrying its app_id/name) into a single work list.
-    //    No pre-merge here: the final regroup (step 6) subsumes the cross-exporter
-    //    merge, so merging now would only be undone by the flatten.
+    // 4. Flatten every instance (carrying its app_id/name) into a single work list,
+    //    resolving each CVM's base URL from the per-machine routing config. No
+    //    pre-merge here: the final regroup (step 6) subsumes the cross-exporter
+    //    merge, so merging now would only be undone by the flatten. An instance
+    //    whose `machine_id` has no configured URL suffix is dropped (logged),
+    //    since its CVM cannot be addressed.
     let client = &state.http_client;
     let challenge = challenge.as_str();
     let max_inflight = state.config.max_inflight;
+    let quote_service_port = state.config.quote_service_port;
+    let machine_suffixes = state.config.machine_suffixes();
     let flat = summaries.into_iter().flat_map(|summary| {
         let app_id = summary.app_id;
         let name = summary.name;
@@ -256,13 +271,28 @@ pub async fn get_active_cvms(
             .into_iter()
             .map(move |instance| (app_id.clone(), name.clone(), instance))
     });
+    let resolved = flat.filter_map(|(app_id, name, instance)| {
+        match machine_suffixes.get(instance.machine_id.as_str()) {
+            Some(suffixe) => {
+                let url = build_cvm_url(&instance.instance_id, quote_service_port, suffixe);
+                Some((app_id, name, instance, url))
+            }
+            None => {
+                warn!(
+                    "dropping instance {}: no url suffix configured for machine_id {}",
+                    instance.instance_id, instance.machine_id
+                );
+                None
+            }
+        }
+    });
 
     // 5. Enrich instances with a bounded number of concurrent fetches
     //    (`max_inflight`, from config) rather than firing everything at once.
     //    Instances whose quote/info fetch fails are dropped inside `enrich_instance`.
-    let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(flat)
-        .map(|(app_id, name, instance)| async move {
-            enrich_instance(client, challenge, instance)
+    let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(resolved)
+        .map(|(app_id, name, instance, url)| async move {
+            enrich_instance(client, challenge, &url, instance)
                 .await
                 .map(|ui| (app_id, name, ui))
         })
@@ -390,11 +420,10 @@ mod tests {
 
         let instance = CvmInstance {
             instance_id: "i1".to_owned(),
-            url: server.uri(),
             machine_id: "m1".to_owned(),
         };
 
-        let ui = enrich_instance(&reqwest::Client::new(), "abc", instance)
+        let ui = enrich_instance(&reqwest::Client::new(), "abc", &server.uri(), instance)
             .await
             .expect("instance should be enriched");
 
@@ -417,14 +446,21 @@ mod tests {
 
         let instance = CvmInstance {
             instance_id: "i1".to_owned(),
-            url: server.uri(),
             machine_id: "m1".to_owned(),
         };
 
         assert!(
-            enrich_instance(&reqwest::Client::new(), "abc", instance)
+            enrich_instance(&reqwest::Client::new(), "abc", &server.uri(), instance)
                 .await
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn build_cvm_url_combines_instance_port_and_suffixe() {
+        assert_eq!(
+            build_cvm_url("i-abc", 9999, "node1.apps.example.dev"),
+            "https://i-abc-9999.node1.apps.example.dev"
         );
     }
 
