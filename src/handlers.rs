@@ -195,31 +195,15 @@ async fn enrich_instance(
     }
 }
 
-/// `GET /cvms?challenge=<nonce>` — returns active CVMs across all configured
-/// exporters, grouped by app, with each instance's quote and compose manifest
-/// embedded so the UI never contacts the CVMs directly.
+/// Discovers every active instance across all configured exporters.
 ///
-/// Queries every configured exporter's `/cvms` endpoint in parallel, merges the
-/// per-machine groups by `app_id`, then fetches each instance's `/quote` (bound
-/// to the caller's `challenge`) and `/info` concurrently. Unreachable or failing
-/// exporters are skipped so a single faulty machine does not abort the whole
-/// aggregation; the request only fails if *every* exporter fails. Instances whose
-/// quote/info fetch fails are dropped from the response (logged).
-///
-/// Requires a non-empty `challenge` query parameter; returns `400` otherwise.
-pub async fn get_active_cvms(
-    State(state): State<AppState>,
-    Query(query): Query<CvmsQuery>,
-) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
-    // 0. A challenge (verifier nonce) is mandatory: it is relayed to each CVM's
-    //    /quote endpoint so the returned quote is bound to the UI's nonce.
-    let challenge = query
-        .challenge
-        .filter(|c| !c.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest("missing required query parameter: challenge".to_owned())
-        })?;
-
+/// Queries each exporter's `/cvms` endpoint concurrently and flattens the result
+/// into a flat work list of `(app_id, name, instance)` tuples. Unreachable or
+/// failing exporters are skipped (logged) so a single faulty machine does not
+/// abort discovery; the call only fails when *every* configured exporter fails.
+async fn discover_instances(
+    state: &AppState,
+) -> Result<Vec<(String, String, CvmInstance)>, AppError> {
     // 1. Query every exporter concurrently — we need all responses, not the first.
     let futures = state
         .config
@@ -252,9 +236,52 @@ pub async fn get_active_cvms(
         ));
     }
 
-    // 4. Flatten every instance (carrying its app_id/name) into a single work list,
-    //    resolving each CVM's base URL from the per-machine routing config. No
-    //    pre-merge here: the final regroup (step 6) subsumes the cross-exporter
+    // 4. Flatten every instance, carrying its app_id/name.
+    let flat = summaries
+        .into_iter()
+        .flat_map(|summary| {
+            let app_id = summary.app_id;
+            let name = summary.name;
+            summary
+                .instances
+                .into_iter()
+                .map(move |instance| (app_id.clone(), name.clone(), instance))
+        })
+        .collect();
+
+    Ok(flat)
+}
+
+/// `GET /cvms?challenge=<nonce>` — returns active CVMs across all configured
+/// exporters, grouped by app, with each instance's quote and compose manifest
+/// embedded so the UI never contacts the CVMs directly.
+///
+/// Queries every configured exporter's `/cvms` endpoint in parallel, merges the
+/// per-machine groups by `app_id`, then fetches each instance's `/quote` (bound
+/// to the caller's `challenge`) and `/info` concurrently. Unreachable or failing
+/// exporters are skipped so a single faulty machine does not abort the whole
+/// aggregation; the request only fails if *every* exporter fails. Instances whose
+/// quote/info fetch fails are dropped from the response (logged).
+///
+/// Requires a non-empty `challenge` query parameter; returns `400` otherwise.
+pub async fn get_active_cvms(
+    State(state): State<AppState>,
+    Query(query): Query<CvmsQuery>,
+) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
+    // 0. A challenge (verifier nonce) is mandatory: it is relayed to each CVM's
+    //    /quote endpoint so the returned quote is bound to the UI's nonce.
+    let challenge = query
+        .challenge
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("missing required query parameter: challenge".to_owned())
+        })?;
+
+    // 1. Discover every active instance across all exporters.
+    let discovered = discover_instances(&state).await?;
+
+    // 2. Resolve each CVM's base URL from the per-machine routing config. No
+    //    pre-merge here: the final regroup (step 4) subsumes the cross-exporter
     //    merge, so merging now would only be undone by the flatten. An instance
     //    whose `machine_id` has no configured URL suffix is dropped (logged),
     //    since its CVM cannot be addressed.
@@ -263,15 +290,7 @@ pub async fn get_active_cvms(
     let max_inflight = state.config.max_inflight;
     let quote_service_port = state.config.quote_service_port;
     let machine_suffixes = state.config.machine_suffixes();
-    let flat = summaries.into_iter().flat_map(|summary| {
-        let app_id = summary.app_id;
-        let name = summary.name;
-        summary
-            .instances
-            .into_iter()
-            .map(move |instance| (app_id.clone(), name.clone(), instance))
-    });
-    let resolved = flat.filter_map(|(app_id, name, instance)| {
+    let resolved = discovered.into_iter().filter_map(|(app_id, name, instance)| {
         match machine_suffixes.get(instance.machine_id.as_str()) {
             Some(suffixe) => {
                 let url = build_cvm_url(&instance.instance_id, quote_service_port, suffixe);
@@ -287,7 +306,7 @@ pub async fn get_active_cvms(
         }
     });
 
-    // 5. Enrich instances with a bounded number of concurrent fetches
+    // 3. Enrich instances with a bounded number of concurrent fetches
     //    (`max_inflight`, from config) rather than firing everything at once.
     //    Instances whose quote/info fetch fails are dropped inside `enrich_instance`.
     let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(resolved)
@@ -303,7 +322,7 @@ pub async fn get_active_cvms(
         .flatten()
         .collect();
 
-    // 6. Regroup by `app_id` — this fold is also the cross-exporter merge, now on
+    // 4. Regroup by `app_id` — this fold is also the cross-exporter merge, now on
     //    the enriched type.
     let ui_summaries =
         merge_cvms(
