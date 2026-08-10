@@ -1,24 +1,23 @@
 use std::collections::HashMap;
 
-use crate::types::EnrichedCvmSummary;
+use crate::types::Summary;
 
-/// Merges enriched CVM groups into a single list keyed by `app_id`, concatenating
+/// Merges per-app CVM groups into a single list keyed by `app_id`, concatenating
 /// the instances of every group sharing the same `app_id`. For a given `app_id`,
 /// the `name` of the first group encountered is kept. Output ordering is
 /// unspecified.
 ///
-/// Called after enrichment: each input group typically holds a single instance
-/// (one per `(exporter, instance)` pair), and this fold regroups them by app —
-/// which is also where the cross-exporter merge happens.
-pub fn merge_cvms(
-    summaries: impl IntoIterator<Item = EnrichedCvmSummary>,
-) -> Vec<EnrichedCvmSummary> {
-    let mut groups: HashMap<String, EnrichedCvmSummary> = HashMap::new();
+/// Generic over the instance type, so it regroups both the plain listing and the
+/// enriched response. Each input group typically holds a single instance (one per
+/// `(exporter, instance)` pair), and this fold is also where the cross-exporter
+/// merge happens.
+pub fn merge_cvms<I>(summaries: impl IntoIterator<Item = Summary<I>>) -> Vec<Summary<I>> {
+    let mut groups: HashMap<String, Summary<I>> = HashMap::new();
 
     for summary in summaries {
         groups
             .entry(summary.app_id.clone())
-            .or_insert_with(|| EnrichedCvmSummary {
+            .or_insert_with(|| Summary {
                 app_id: summary.app_id,
                 name: summary.name,
                 instances: Vec::new(),
@@ -33,7 +32,7 @@ pub fn merge_cvms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EnrichedCvmInstance, QuoteResponse};
+    use crate::types::{EnrichedCvmInstance, EnrichedCvmSummary, QuoteResponse};
 
     /// Builds an enriched instance; only the ids matter for these grouping tests,
     /// so the quote/compose fields are left empty.
