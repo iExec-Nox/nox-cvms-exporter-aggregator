@@ -298,13 +298,15 @@ pub async fn get_active_cvms(
     let discovered = discover_instances(&state).await?;
 
     // 2. Regroup the flat work list by `app_id` (also the cross-exporter merge).
-    let listing = merge_cvms(discovered.into_iter().map(|(app_id, name, instance)| {
-        CvmSummary {
-            app_id,
-            name,
-            instances: vec![instance],
-        }
-    }));
+    let listing = merge_cvms(
+        discovered
+            .into_iter()
+            .map(|(app_id, name, instance)| CvmSummary {
+                app_id,
+                name,
+                instances: vec![instance],
+            }),
+    );
 
     Ok(Json(listing))
 }
