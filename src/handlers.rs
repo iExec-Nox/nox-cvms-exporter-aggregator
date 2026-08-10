@@ -332,11 +332,12 @@ pub async fn post_attestations(
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
     // 0. A fresh challenge (verifier nonce) is mandatory: it is relayed to each
     //    targeted CVM's /quote endpoint so the returned quote is bound to it.
-    if request.challenge.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "missing required field: challenge".to_owned(),
-        ));
-    }
+    let challenge = request
+        .challenge
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest("missing required field: challenge".to_owned())
+        })?;
 
     // 1. Resolve each target's base URL from the per-machine routing config. A
     //    target whose `machine_id` is not configured is dropped (logged): we
@@ -371,7 +372,7 @@ pub async fn post_attestations(
     // 2. Enrich (bounded concurrency) and regroup by `app_id`.
     let ui_summaries = enrich_and_group(
         &state.http_client,
-        &request.challenge,
+        &challenge,
         state.config.max_inflight,
         resolved,
     )

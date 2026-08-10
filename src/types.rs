@@ -73,7 +73,10 @@ pub struct AttestationTarget {
 pub struct AttestationRequest {
     /// Fresh verifier nonce, relayed to each targeted CVM's `/quote` endpoint so
     /// the returned quote is bound to it (anti-replay / freshness guarantee).
-    pub challenge: String,
+    ///
+    /// Optional at the deserialization layer so a missing value yields a clean
+    /// `400 Bad Request` (like an empty one) rather than a `422` serde rejection.
+    pub challenge: Option<String>,
     /// Instances to attest, echoed from a prior listing. Granularity is entirely
     /// the caller's: one instance, all instances of an app, or everything.
     pub instances: Vec<AttestationTarget>,
