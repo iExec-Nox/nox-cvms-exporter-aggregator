@@ -23,9 +23,9 @@ pub struct Config {
     /// Port of the quote service exposed by every CVM. Used, together with the
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
     pub quote_service_port: u16,
-    /// Per-machine URL suffixes, as `machine_id=suffixe_url` pairs (comma-separated).
-    /// A CVM's base URL is rebuilt as `https://<instance_id>-<quote_service_port>.<suffixe_url>`,
-    /// where `suffixe_url` is looked up by the instance's `machine_id`.
+    /// Per-machine URL suffixes, as `machine_id=suffix_url` pairs (comma-separated).
+    /// A CVM's base URL is rebuilt as `https://<instance_id>-<quote_service_port>.<suffix_url>`,
+    /// where `suffix_url` is looked up by the instance's `machine_id`.
     pub machines: Vec<String>,
 }
 
@@ -81,10 +81,10 @@ impl Config {
         for entry in &self.machines {
             let well_formed = entry
                 .split_once('=')
-                .is_some_and(|(id, suffixe)| !id.trim().is_empty() && !suffixe.trim().is_empty());
+                .is_some_and(|(id, suffix)| !id.trim().is_empty() && !suffix.trim().is_empty());
             if !well_formed {
                 return Err(ConfigError::Message(format!(
-                    "invalid `machines` entry {entry:?}: expected `machine_id=suffixe_url`"
+                    "invalid `machines` entry {entry:?}: expected `machine_id=suffix_url`"
                 )));
             }
         }
@@ -99,7 +99,7 @@ impl Config {
         addr
     }
 
-    /// Parses `machines` (`machine_id=suffixe_url` pairs) into a lookup map.
+    /// Parses `machines` (`machine_id=suffix_url` pairs) into a lookup map.
     ///
     /// Entries without a `=` separator are skipped. Whitespace around each key
     /// and value is trimmed.
@@ -107,7 +107,7 @@ impl Config {
         self.machines
             .iter()
             .filter_map(|entry| entry.split_once('='))
-            .map(|(id, suffixe)| (id.trim().to_owned(), suffixe.trim().to_owned()))
+            .map(|(id, suffix)| (id.trim().to_owned(), suffix.trim().to_owned()))
             .collect()
     }
 }

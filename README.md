@@ -11,7 +11,7 @@ The aggregator exposes the CVM fleet to the attestation UI in **two phases**, so
 1. **Listing** — `GET /cvms` queries every configured exporter **in parallel** and merges the results by `app_id` (an app running on several machines becomes a single entry whose `instances` concatenate every machine's instances). The response is lightweight: each instance carries only its `instance_id` and `machine_id` — **no** attestation data.
 2. **On-demand attestation** — `POST /cvms/attestations` takes a caller-selected set of instances (echoed back from the listing) plus a **fresh** `challenge`, fetches each one's quote and compose manifest, and returns them grouped by `app_id`. The UI decides the granularity: one instance, every instance of an app, or all of them.
 
-The aggregator rebuilds each CVM's base URL **internally** — `https://<instance_id>-<quote_service_port>.<suffixe_url>` — from its own config (a global `quote_service_port` plus a `machine_id → suffixe_url` map). The URL is never exposed to the UI, and the UI never contacts the CVMs directly.
+The aggregator rebuilds each CVM's base URL **internally** — `https://<instance_id>-<quote_service_port>.<suffix_url>` — from its own config (a global `quote_service_port` plus a `machine_id → suffix_url` map). The URL is never exposed to the UI, and the UI never contacts the CVMs directly.
 
 ```
    GET /cvms  (listing, no attestation data)
@@ -130,7 +130,7 @@ Nested keys use `__` as separator (e.g. `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__PO
 | `NOX_CVMS_EXPORTER_AGGREGATOR_REQUEST_TIMEOUT_SECS` | `10` | Per-request timeout, in seconds, when querying an exporter or a CVM |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_MAX_INFLIGHT` | `2` | Max instances attested concurrently (each issues `/quote` + `/info`) |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_QUOTE_SERVICE_PORT` | `9999` | Port of the quote service exposed by every CVM, used to rebuild CVM URLs |
-| `NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES` | _(empty)_ | Comma-separated `machine_id=suffixe_url` pairs, used to rebuild each CVM's URL as `https://<instance_id>-<quote_service_port>.<suffixe_url>` |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES` | _(empty)_ | Comma-separated `machine_id=suffix_url` pairs, used to rebuild each CVM's URL as `https://<instance_id>-<quote_service_port>.<suffix_url>` |
 
 The exporter list accepts plain HTTP or HTTPS URLs, with an optional port:
 
