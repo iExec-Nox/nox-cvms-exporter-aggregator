@@ -78,16 +78,10 @@ impl Config {
             ));
         }
 
-        for entry in &self.machines {
-            let well_formed = entry
-                .split_once('=')
-                .is_some_and(|(id, suffix)| !id.trim().is_empty() && !suffix.trim().is_empty());
-            if !well_formed {
-                return Err(ConfigError::Message(format!(
-                    "invalid `machines` entry {entry:?}: expected `machine_id=suffix_url`"
-                )));
-            }
-        }
+        // Parse the machine map to surface any malformed `machines` entry at
+        // startup; `machine_suffixes` is the single source of truth for what a
+        // well-formed entry is.
+        self.machine_suffixes()?;
 
         Ok(())
     }
@@ -99,15 +93,24 @@ impl Config {
         addr
     }
 
-    /// Parses `machines` (`machine_id=suffix_url` pairs) into a lookup map.
+    /// Parses `machines` (`machine_id=suffix_url` pairs) into a lookup map,
+    /// trimming whitespace around each key and value.
     ///
-    /// Entries without a `=` separator are skipped. Whitespace around each key
-    /// and value is trimmed.
-    pub fn machine_suffixes(&self) -> HashMap<String, String> {
+    /// Returns an error on any entry that is not a well-formed
+    /// `machine_id=suffix_url` pair (missing `=`, empty key, or empty value): a
+    /// malformed entry surfaces here rather than being silently skipped. The
+    /// check is self-contained — it does not lean on `validate` having run.
+    pub fn machine_suffixes(&self) -> Result<HashMap<String, String>, ConfigError> {
         self.machines
             .iter()
-            .filter_map(|entry| entry.split_once('='))
-            .map(|(id, suffix)| (id.trim().to_owned(), suffix.trim().to_owned()))
+            .map(|entry| match entry.split_once('=') {
+                Some((id, suffix)) if !id.trim().is_empty() && !suffix.trim().is_empty() => {
+                    Ok((id.trim().to_owned(), suffix.trim().to_owned()))
+                }
+                _ => Err(ConfigError::Message(format!(
+                    "invalid `machines` entry {entry:?}: expected `machine_id=suffix_url`"
+                ))),
+            })
             .collect()
     }
 }
@@ -132,11 +135,25 @@ mod tests {
 
     #[test]
     fn machine_suffixes_parses_pairs_and_trims() {
-        let map = config(&[], &["m-a = node-a.example ", "m-b=node-b.example"]).machine_suffixes();
+        let map = config(&[], &["m-a = node-a.example ", "m-b=node-b.example"])
+            .machine_suffixes()
+            .expect("well-formed entries should parse");
 
         assert_eq!(map.get("m-a").map(String::as_str), Some("node-a.example"));
         assert_eq!(map.get("m-b").map(String::as_str), Some("node-b.example"));
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn machine_suffixes_errors_on_a_malformed_entry() {
+        let err = config(&[], &["no-separator"])
+            .machine_suffixes()
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("no-separator"),
+            "error should name the offending entry: {err}"
+        );
     }
 
     #[test]

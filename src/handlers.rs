@@ -342,7 +342,8 @@ pub async fn post_attestations(
     //    refuse to address a machine outside our own config, which also bounds
     //    the rebuilt URL to a trusted domain.
     let quote_service_port = state.config.quote_service_port;
-    let machine_suffixes = state.config.machine_suffixes();
+    // Parsed once at startup and cached in state — no per-request re-parsing.
+    let machine_suffixes = &state.machine_suffixes;
     let resolved: Vec<(String, String, CvmInstance, String)> = request
         .instances
         .into_iter()

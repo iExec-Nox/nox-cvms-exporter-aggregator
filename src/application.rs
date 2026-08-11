@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -18,6 +20,10 @@ pub struct AppState {
     pub config: Config,
     /// Shared HTTP client used to query the per-machine exporters in parallel.
     pub http_client: reqwest::Client,
+    /// Per-machine URL suffixes (`machine_id -> suffix_url`), parsed once at
+    /// startup from `Config::machine_suffixes`. Behind an `Arc` so cloning
+    /// `AppState` per request stays cheap and never re-parses.
+    pub machine_suffixes: Arc<HashMap<String, String>>,
 }
 
 /// Top-level application builder and entry point.
@@ -62,9 +68,14 @@ impl Application {
             .timeout(Duration::from_secs(self.config.request_timeout_secs))
             .build()?;
 
+        // Parse the machine map once at startup; `Config::load` already validated
+        // it, so this cannot fail here in practice.
+        let machine_suffixes = Arc::new(self.config.machine_suffixes()?);
+
         let state = AppState {
             config: self.config,
             http_client,
+            machine_suffixes,
         };
 
         info!("Starting nox-cvms-exporter-aggregator on {address}");
