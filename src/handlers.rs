@@ -350,17 +350,19 @@ pub async fn post_attestations(
         .filter_map(
             |target| match machine_suffixes.get(target.machine_id.as_str()) {
                 Some(suffix) => {
-                    let url = build_cvm_url(&target.instance_id, quote_service_port, suffix);
+                    let url =
+                        build_cvm_url(target.instance_id.as_str(), quote_service_port, suffix);
                     let instance = CvmInstance {
-                        instance_id: target.instance_id,
+                        instance_id: target.instance_id.into_inner(),
                         machine_id: target.machine_id,
                     };
-                    Some((target.app_id, target.name, instance, url))
+                    Some((target.app_id.into_inner(), target.name, instance, url))
                 }
                 None => {
                     warn!(
                         "dropping target {}: no url suffix configured for machine_id {}",
-                        target.instance_id, target.machine_id
+                        target.instance_id.as_str(),
+                        target.machine_id
                     );
                     None
                 }
