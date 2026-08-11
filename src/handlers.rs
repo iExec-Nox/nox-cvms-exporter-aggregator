@@ -335,9 +335,7 @@ pub async fn post_attestations(
     let challenge = request
         .challenge
         .filter(|c| !c.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest("missing required field: challenge".to_owned())
-        })?;
+        .ok_or_else(|| AppError::BadRequest("missing required field: challenge".to_owned()))?;
 
     // 1. Resolve each target's base URL from the per-machine routing config. A
     //    target whose `machine_id` is not configured is dropped (logged): we
