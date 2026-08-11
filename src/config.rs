@@ -42,7 +42,7 @@ impl Config {
     /// Loads configuration from environment variables, applying built-in defaults
     /// for any value not explicitly provided.
     pub fn load() -> Result<Self, ConfigError> {
-        let config = ConfigBuilder::builder()
+        let config: Self = ConfigBuilder::builder()
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 8080)?
             .set_default("exporters", Vec::<String>::new())?
@@ -59,9 +59,37 @@ impl Config {
                     .with_list_parse_key("exporters")
                     .with_list_parse_key("machines"),
             )
-            .build()?;
+            .build()?
+            .try_deserialize()?;
 
-        config.try_deserialize()
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    /// Rejects a configuration that would silently misbehave at runtime instead
+    /// of degrading quietly: no exporter to aggregate, or a malformed `machines`
+    /// entry whose CVMs would then be unaddressable. Better to stop at startup
+    /// than to ignore a value and carry on as if nothing were wrong.
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.exporters.is_empty() {
+            return Err(ConfigError::Message(
+                "no exporters configured: set NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS".to_owned(),
+            ));
+        }
+
+        for entry in &self.machines {
+            let well_formed = entry
+                .split_once('=')
+                .is_some_and(|(id, suffixe)| !id.trim().is_empty() && !suffixe.trim().is_empty());
+            if !well_formed {
+                return Err(ConfigError::Message(format!(
+                    "invalid `machines` entry {entry:?}: expected `machine_id=suffixe_url`"
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the `host:port` string that the HTTP server should bind to.
@@ -88,13 +116,13 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn config_with_machines(machines: &[&str]) -> Config {
+    fn config(exporters: &[&str], machines: &[&str]) -> Config {
         Config {
             server: ServerConfig {
                 host: "0.0.0.0".to_owned(),
                 port: 8080,
             },
-            exporters: Vec::new(),
+            exporters: exporters.iter().map(|s| (*s).to_owned()).collect(),
             request_timeout_secs: 10,
             max_inflight: 2,
             quote_service_port: 9999,
@@ -104,9 +132,7 @@ mod tests {
 
     #[test]
     fn machine_suffixes_parses_pairs_and_trims() {
-        let config = config_with_machines(&["m-a = node-a.example ", "m-b=node-b.example"]);
-
-        let map = config.machine_suffixes();
+        let map = config(&[], &["m-a = node-a.example ", "m-b=node-b.example"]).machine_suffixes();
 
         assert_eq!(map.get("m-a").map(String::as_str), Some("node-a.example"));
         assert_eq!(map.get("m-b").map(String::as_str), Some("node-b.example"));
@@ -114,12 +140,40 @@ mod tests {
     }
 
     #[test]
-    fn machine_suffixes_skips_malformed_entries() {
-        let config = config_with_machines(&["no-separator", "m-a=node-a.example"]);
+    fn validate_accepts_a_well_formed_config() {
+        let config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
 
-        let map = config.machine_suffixes();
+        assert!(config.validate().is_ok());
+    }
 
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("m-a").map(String::as_str), Some("node-a.example"));
+    #[test]
+    fn validate_rejects_empty_exporters() {
+        let err = config(&[], &["m-a=node-a.example"]).validate().unwrap_err();
+
+        assert!(
+            err.to_string().contains("exporters"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_machines_entry_without_separator() {
+        let err = config(&["http://node-a:8080"], &["no-separator"])
+            .validate()
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("no-separator"),
+            "error should name the offending entry: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_machines_entry_with_an_empty_value() {
+        assert!(
+            config(&["http://node-a:8080"], &["m-a="])
+                .validate()
+                .is_err()
+        );
     }
 }
