@@ -291,7 +291,7 @@ async fn discover_instances(
 ///
 /// Unreachable or failing exporters are skipped so a single faulty machine does
 /// not abort the listing; the request only fails if *every* exporter fails.
-pub async fn get_active_cvms(
+pub(crate) async fn get_active_cvms(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CvmSummary>>, AppError> {
     // 1. Discover every active instance across all exporters.
@@ -328,7 +328,7 @@ pub async fn get_active_cvms(
 /// The `challenge` is mandatory and validated as exactly 64 bytes at
 /// deserialization (see `Challenge`); a missing or ill-sized value is rejected
 /// with `422` before this handler runs.
-pub async fn post_attestations(
+pub(crate) async fn post_attestations(
     State(state): State<AppState>,
     Json(request): Json<AttestationRequest>,
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
