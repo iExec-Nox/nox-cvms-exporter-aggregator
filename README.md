@@ -22,10 +22,10 @@ The aggregator rebuilds each CVM's base URL **internally** — `https://<instanc
                           └──────────────────────────┘
 
    POST /cvms/attestations  (on-demand, per caller-selected instance)
-┌──────────────┐          ┌──────────────────────────┐
-│  aggregator  │────┬────►│ CVM quote-service (/quote)│   rebuilds each URL from config,
-│              │    └────►│ CVM quote-service (/info) │   fetches quote + compose manifest
-└──────────────┘          └──────────────────────────┘
+┌──────────────┐          ┌────────────────────────────┐
+│  aggregator  │────┬────►│ CVM quote-service (/quote) │   rebuilds each URL from config,
+│              │    └────►│ CVM quote-service (/info)  │   fetches quote + compose manifest
+└──────────────┘          └────────────────────────────┘
 ```
 
 ## Endpoints
@@ -46,11 +46,11 @@ Queries every configured exporter concurrently and returns their active CVMs mer
 ```json
 [
   {
-    "app_id": "a1b2c3...",
+    "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
     "name": "my-app",
     "instances": [
       {
-        "instance_id": "i-0abc123",
+        "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
         "machine_id": "machine-a"
       }
     ]
@@ -74,9 +74,9 @@ Enriches a caller-selected set of instances with their attestation data, **witho
   "challenge": "<fresh-verifier-nonce>",
   "instances": [
     {
-      "app_id": "a1b2c3...",
+      "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
       "name": "my-app",
-      "instance_id": "i-0abc123",
+      "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
       "machine_id": "machine-a"
     }
   ]
@@ -86,7 +86,7 @@ Enriches a caller-selected set of instances with their attestation data, **witho
 | Field | Required | Description |
 |---|---|---|
 | `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
-| `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. |
+| `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. `app_id` and `instance_id` are 40-character hex ids — 20 random bytes (`openssl rand -hex 20`) — and are validated as such (otherwise `422`). |
 
 For every target the aggregator rebuilds the CVM base URL from the machine's configured URL suffix, then fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.
 
@@ -95,11 +95,11 @@ For every target the aggregator rebuilds the CVM base URL from the machine's con
 ```json
 [
   {
-    "app_id": "a1b2c3...",
+    "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
     "name": "my-app",
     "instances": [
       {
-        "instance_id": "i-0abc123",
+        "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
         "machine_id": "machine-a",
         "quote": {
           "quote": "0400020081...",
