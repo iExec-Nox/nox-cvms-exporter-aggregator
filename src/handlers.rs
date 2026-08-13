@@ -230,6 +230,12 @@ async fn enrich_and_group(
 /// into a flat work list of `(app_id, name, instance)` tuples. Unreachable or
 /// failing exporters are skipped (logged) so a single faulty machine does not
 /// abort discovery; the call only fails when *every* configured exporter fails.
+///
+/// # Note
+///
+/// The `failures > 0` guard is load-bearing: with an empty `exporters` list,
+/// `failures == exporters.len()` would be `0 == 0` and wrongly report an error.
+/// Do not drop it as redundant.
 async fn discover_instances(
     state: &AppState,
 ) -> Result<Vec<(String, String, CvmInstance)>, AppError> {
@@ -255,10 +261,7 @@ async fn discover_instances(
         }
     }
 
-    // 3. Fail only when no exporter answered at all.
-    // The `failures > 0` guard is intentional: if `exporters` is empty,
-    // `failures == exporters.len()` would be `0 == 0` (true) and incorrectly
-    // return an error. Do not remove it as "redundant".
+    // 3. Fail only when no exporter answered at all (guard is load-bearing — see doc).
     if failures > 0 && failures == state.config.exporters.len() {
         return Err(AppError::Internal(
             "all configured exporters failed".to_owned(),
@@ -330,18 +333,15 @@ pub async fn post_attestations(
     State(state): State<AppState>,
     Json(request): Json<AttestationRequest>,
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
-    // 0. A fresh challenge (verifier nonce) is mandatory: it is relayed to each
-    //    targeted CVM's /quote endpoint so the returned quote is bound to it.
+    // 0. A fresh challenge is mandatory (relayed to each CVM's /quote — see doc).
     if request.challenge.trim().is_empty() {
         return Err(AppError::BadRequest(
             "missing required field: challenge".to_owned(),
         ));
     }
 
-    // 1. Resolve each target's base URL from the per-machine routing config. A
-    //    target whose `machine_id` is not configured is dropped (logged): we
-    //    refuse to address a machine outside our own config, which also bounds
-    //    the rebuilt URL to a trusted domain.
+    // 1. Resolve each target's base URL; drop targets whose machine_id isn't
+    //    configured (see doc).
     let quote_service_port = state.config.quote_service_port;
     let machine_suffixes = state.config.machine_suffixes();
     let resolved: Vec<(String, String, CvmInstance, String)> = request

@@ -24,8 +24,6 @@ pub struct Config {
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
     pub quote_service_port: u16,
     /// Per-machine URL suffixes, as `machine_id=suffixe_url` pairs (comma-separated).
-    /// A CVM's base URL is rebuilt as `https://<instance_id>-<quote_service_port>.<suffixe_url>`,
-    /// where `suffixe_url` is looked up by the instance's `machine_id`.
     pub machines: Vec<String>,
 }
 
