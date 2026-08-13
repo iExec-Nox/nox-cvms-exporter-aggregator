@@ -10,6 +10,7 @@ use tracing::warn;
 use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
+use crate::extract::JsonBody;
 use crate::types::{
     AttestationRequest, CvmInstance, CvmSummary, EnrichedCvmInstance, EnrichedCvmSummary,
     ExporterInfo, QuoteResponse,
@@ -330,7 +331,7 @@ pub(crate) async fn get_active_cvms(
 /// with `422` before this handler runs.
 pub(crate) async fn post_attestations(
     State(state): State<AppState>,
-    Json(request): Json<AttestationRequest>,
+    JsonBody(request): JsonBody<AttestationRequest>,
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
     // 0. The challenge (verifier nonce) is already validated by its type, so it
     //    is ready to relay as-is to each targeted CVM's /quote endpoint.

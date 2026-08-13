@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use axum::extract::rejection::JsonRejection;
 use serde_json::json;
 use thiserror::Error;
 
@@ -18,6 +19,22 @@ pub(crate) enum AppError {
     /// 500 — JSON (de)serialization failure, converted via `?`.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// 4xx — request body could not be extracted or failed type-level validation
+    /// (from a `JsonRejection`). Carries the status axum inferred (`400` invalid
+    /// JSON, `422` well-formed JSON that fails validation, `415` wrong content
+    /// type) so the service still answers with its JSON error envelope instead of
+    /// axum's default plain-text response.
+    #[error("{message}")]
+    InvalidBody { status: StatusCode, message: String },
+}
+
+impl From<JsonRejection> for AppError {
+    fn from(rejection: JsonRejection) -> Self {
+        AppError::InvalidBody {
+            status: rejection.status(),
+            message: rejection.body_text(),
+        }
+    }
 }
 
 impl AppError {
@@ -25,6 +42,7 @@ impl AppError {
         match self {
             AppError::Internal(_) => "internal",
             AppError::Serialization(_) => "serialization",
+            AppError::InvalidBody { .. } => "invalid_body",
         }
     }
 
@@ -32,6 +50,7 @@ impl AppError {
         match self {
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::InvalidBody { status, .. } => *status,
         }
     }
 }
