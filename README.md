@@ -22,10 +22,10 @@ The aggregator rebuilds each CVM's base URL **internally** — `https://<instanc
                           └──────────────────────────┘
 
    POST /cvms/attestations  (on-demand, per caller-selected instance)
-┌──────────────┐          ┌──────────────────────────┐
+┌──────────────┐          ┌───────────────────────────┐
 │  aggregator  │────┬────►│ CVM quote-service (/quote)│   rebuilds each URL from config,
 │              │    └────►│ CVM quote-service (/info) │   fetches quote + compose manifest
-└──────────────┘          └──────────────────────────┘
+└──────────────┘          └───────────────────────────┘
 ```
 
 ## Endpoints
