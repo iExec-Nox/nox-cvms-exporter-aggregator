@@ -17,8 +17,9 @@ pub struct Config {
     pub exporters: Vec<String>,
     /// Per-request timeout, in seconds, when querying a machine exporter.
     pub request_timeout_secs: u64,
-    /// Max instances enriched concurrently on `GET /cvms` (each enrichment issues
-    /// two requests: `/quote` + `/info`). Bounds the load on the CVM nodes.
+    /// Max instances enriched concurrently on `POST /cvms/attestations` (each
+    /// enrichment issues two requests: `/quote` + `/info`). Bounds the load on
+    /// the CVM nodes.
     pub max_inflight: usize,
     /// Port of the quote service exposed by every CVM. Used, together with the
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
