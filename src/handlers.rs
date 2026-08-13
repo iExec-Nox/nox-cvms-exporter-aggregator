@@ -343,7 +343,8 @@ pub async fn post_attestations(
     // 1. Resolve each target's base URL; drop targets whose machine_id isn't
     //    configured (see doc).
     let quote_service_port = state.config.quote_service_port;
-    let machine_suffixes = state.config.machine_suffixes();
+    // Parsed once at startup and cached in state — no per-request re-parsing.
+    let machine_suffixes = &state.machine_suffixes;
     let resolved: Vec<(String, String, CvmInstance, String)> = request
         .instances
         .into_iter()
