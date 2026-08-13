@@ -63,10 +63,19 @@ fn validate_exporters(exporters: &Vec<String>) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// Rejects any `machines` entry that is not a well-formed `machine_id=suffix_url`
-/// pair (missing `=`, empty key, or empty value): such an entry would leave its
-/// CVMs unaddressable, so we stop at startup rather than silently skip it.
+/// Rejects an empty `machines` map, or any entry that is not a well-formed
+/// `machine_id=suffix_url` pair (missing `=`, empty key, or empty value): without
+/// at least one mapping no CVM can be addressed for attestation, and a malformed
+/// entry would leave its CVMs unaddressable — so we stop at startup rather than
+/// silently carry on.
 fn validate_machines(machines: &Vec<String>) -> Result<(), ValidationError> {
+    if machines.is_empty() {
+        return Err(
+            ValidationError::new("machines_empty").with_message(Cow::from(
+                "at least one machine must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES)",
+            )),
+        );
+    }
     for entry in machines {
         let well_formed = entry
             .split_once('=')
@@ -203,6 +212,18 @@ mod tests {
             config(&["http://node-a:8080"], &["m-a="])
                 .validate()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_machines() {
+        // No machine mapping at all (e.g. the env var is unset) must fail: nothing
+        // could be attested.
+        let err = config(&["http://node-a:8080"], &[]).validate().unwrap_err();
+
+        assert!(
+            err.errors().contains_key("machines"),
+            "error should name the offending field: {err}"
         );
     }
 
