@@ -71,7 +71,7 @@ Enriches a caller-selected set of instances with their attestation data, **witho
 
 ```json
 {
-  "challenge": "<fresh-verifier-nonce>",
+  "challenge": "a3f5c9e18b7d24609f1e8c3a5b7d90f24e6c8a1b3d5f79021c2b3a495d6e7f80",
   "instances": [
     {
       "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
@@ -85,7 +85,7 @@ Enriches a caller-selected set of instances with their attestation data, **witho
 
 | Field | Required | Description |
 |---|---|---|
-| `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
+| `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). Must be **exactly 64 bytes** (a 64-character string — e.g. 32 random bytes hex-encoded), since the CVM quote service uses it as the 64-byte report data. Mandatory and validated at deserialization; a missing or ill-sized `challenge` returns `422 Unprocessable Entity`. |
 | `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. `app_id` and `instance_id` are 40-character hex ids — 20 random bytes (`openssl rand -hex 20`) — and are validated as such (otherwise `422`). |
 
 For every target the aggregator rebuilds the CVM base URL from the machine's configured URL suffix, then fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.

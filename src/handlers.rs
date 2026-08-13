@@ -328,17 +328,15 @@ pub async fn get_active_cvms(
 /// `machine_id` is absent from the routing config (so cannot be addressed inside
 /// a trusted domain), or whose fetch fails, are dropped (logged).
 ///
-/// Requires a non-empty `challenge`; returns `400` otherwise.
+/// The `challenge` is mandatory and validated as exactly 64 bytes at
+/// deserialization (see `Challenge`); a missing or ill-sized value is rejected
+/// with `422` before this handler runs.
 pub async fn post_attestations(
     State(state): State<AppState>,
     Json(request): Json<AttestationRequest>,
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
-    // 0. A fresh challenge is mandatory (relayed to each CVM's /quote — see doc).
-    if request.challenge.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "missing required field: challenge".to_owned(),
-        ));
-    }
+    // 0. The challenge is already validated by its type — relay it as-is.
+    let challenge = request.challenge;
 
     // 1. Resolve each target's base URL; drop targets whose machine_id isn't
     //    configured (see doc).
@@ -374,7 +372,7 @@ pub async fn post_attestations(
     // 2. Enrich (bounded concurrency) and regroup by `app_id`.
     let ui_summaries = enrich_and_group(
         &state.http_client,
-        &request.challenge,
+        challenge.as_str(),
         state.config.max_inflight,
         resolved,
     )

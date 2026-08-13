@@ -104,12 +104,45 @@ pub struct AttestationTarget {
     pub machine_id: String,
 }
 
+/// The verifier's fresh nonce, relayed to each targeted CVM's `/quote?data=…`
+/// endpoint so the returned quote is bound to it (anti-replay / freshness).
+///
+/// The quote service consumes `data` via `String::into_bytes()` and requires
+/// exactly 64 bytes of report data, so the challenge must be exactly 64 bytes
+/// (`String::len()` is the byte length). Deserialization rejects any other
+/// length, and the field is mandatory — so a missing or ill-sized challenge is a
+/// `422` serde rejection.
+#[derive(Debug, Clone)]
+pub struct Challenge(String);
+
+impl Challenge {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Challenge {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() == 64 {
+            Ok(Self(s))
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "challenge must be exactly 64 bytes, got {}",
+                s.len()
+            )))
+        }
+    }
+}
+
 /// Body of `POST /cvms/attestations`.
 #[derive(Debug, Deserialize)]
 pub struct AttestationRequest {
-    /// Fresh verifier nonce, relayed to each targeted CVM's `/quote` endpoint so
-    /// the returned quote is bound to it (anti-replay / freshness guarantee).
-    pub challenge: String,
+    /// Fresh 64-byte verifier nonce (see [`Challenge`]). Mandatory.
+    pub challenge: Challenge,
     /// Instances to attest, echoed from a prior listing. Granularity is entirely
     /// the caller's: one instance, all instances of an app, or everything.
     pub instances: Vec<AttestationTarget>,
@@ -163,5 +196,33 @@ mod tests {
     fn hex_id_rejects_non_hex_character() {
         // 40 characters, but the leading `g` is not hexadecimal.
         assert!(parse_hex_id("g2a1d97f40460d5091879c7373fdb7a853b52691").is_err());
+    }
+
+    fn parse_challenge(s: &str) -> Result<Challenge, serde_json::Error> {
+        serde_json::from_value(serde_json::Value::String(s.to_owned()))
+    }
+
+    #[test]
+    fn challenge_accepts_exactly_64_bytes() {
+        let raw = "a".repeat(64);
+
+        let challenge = parse_challenge(&raw).expect("a 64-byte string is a valid challenge");
+
+        assert_eq!(challenge.as_str().len(), 64);
+    }
+
+    #[test]
+    fn challenge_rejects_other_lengths() {
+        assert!(parse_challenge(&"a".repeat(63)).is_err());
+        assert!(parse_challenge(&"a".repeat(65)).is_err());
+        assert!(parse_challenge("").is_err());
+    }
+
+    #[test]
+    fn attestation_request_requires_challenge() {
+        // No `challenge` field: a non-`Option` field makes this a hard error.
+        let json = serde_json::json!({ "instances": [] });
+
+        assert!(serde_json::from_value::<AttestationRequest>(json).is_err());
     }
 }
