@@ -17,22 +17,23 @@ use validator::{Validate, ValidationError};
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct Config {
     /// HTTP server settings.
+    #[validate(nested)]
     pub server: ServerConfig,
     /// Base URLs of the per-machine `nox-cvms-exporter` instances to query
     /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list.
-    #[validate(length(
-        min = 1,
-        message = "at least one exporter must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS)"
-    ))]
+    #[validate(custom(function = "validate_exporters"))]
     pub exporters: Vec<String>,
     /// Per-request timeout, in seconds, when querying a machine exporter.
+    #[validate(range(min = 1, message = "request_timeout_secs must be at least 1"))]
     pub request_timeout_secs: u64,
     /// Max instances enriched concurrently on `POST /cvms/attestations` (each
     /// enrichment issues two requests: `/quote` + `/info`). Bounds the load on
     /// the CVM nodes.
+    #[validate(range(min = 1, message = "max_inflight must be at least 1"))]
     pub max_inflight: usize,
     /// Port of the quote service exposed by every CVM. Used, together with the
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
+    #[validate(range(min = 1, message = "quote_service_port must be a valid port (1-65535)"))]
     pub quote_service_port: u16,
     /// Per-machine URL suffixes, as `machine_id=suffix_url` pairs (comma-separated).
     #[validate(custom(function = "validate_machines"))]
@@ -40,12 +41,38 @@ pub struct Config {
 }
 
 /// HTTP server binding configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct ServerConfig {
     /// Host or IP address to bind to. Defaults to `0.0.0.0`.
+    #[validate(length(min = 1, message = "server host must not be empty"))]
     pub host: String,
     /// TCP port to listen on. Defaults to `8080`.
+    #[validate(range(min = 1, message = "server port must be a valid port (1-65535)"))]
     pub port: u16,
+}
+
+/// Rejects an empty exporter list, or any entry that is not an `http(s)://` URL:
+/// the aggregator has nothing to aggregate without exporters, and a URL it cannot
+/// reach would only fail later at request time.
+#[allow(clippy::ptr_arg)]
+fn validate_exporters(exporters: &Vec<String>) -> Result<(), ValidationError> {
+    if exporters.is_empty() {
+        return Err(
+            ValidationError::new("exporters_empty").with_message(Cow::from(
+                "at least one exporter must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS)",
+            )),
+        );
+    }
+    for url in exporters {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(
+                ValidationError::new("exporter_invalid_url").with_message(Cow::from(format!(
+                    "invalid exporter URL {url:?}: must start with http:// or https://"
+                ))),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Rejects any `machines` entry that is not a well-formed `machine_id=suffix_url`
@@ -179,5 +206,57 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn validate_rejects_an_exporter_without_a_scheme() {
+        let err = config(&["node-a:8080"], &["m-a=node-a.example"])
+            .validate()
+            .unwrap_err();
+
+        assert!(
+            err.errors().contains_key("exporters"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_request_timeout() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.request_timeout_secs = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_inflight() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.max_inflight = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_quote_service_port() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.quote_service_port = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_server_host() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.server.host = String::new();
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_a_zero_server_port() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.server.port = 0;
+
+        assert!(config.validate().is_err());
     }
 }
