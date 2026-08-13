@@ -192,8 +192,8 @@ async fn enrich_instance(
 /// survivors by `app_id` (which is also the cross-exporter merge). Instances
 /// whose quote/info fetch fails are dropped (logged) inside `enrich_instance`.
 ///
-/// Shared by `GET /cvms` and `POST /cvms/attestations`: both resolve a work list
-/// (from discovery vs. from the caller's targets) and then enrich it identically.
+/// Used by `POST /cvms/attestations` once the caller's targets are resolved to
+/// `(app_id, name, instance, base_url)` tuples.
 async fn enrich_and_group(
     client: &reqwest::Client,
     challenge: &str,
