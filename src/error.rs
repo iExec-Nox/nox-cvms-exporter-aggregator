@@ -1,9 +1,9 @@
+use axum::extract::rejection::JsonRejection;
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use axum::extract::rejection::JsonRejection;
 use serde_json::json;
 use thiserror::Error;
 
