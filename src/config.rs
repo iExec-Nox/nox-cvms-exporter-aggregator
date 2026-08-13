@@ -40,17 +40,6 @@ pub struct Config {
     pub machines: Vec<String>,
 }
 
-/// HTTP server binding configuration.
-#[derive(Debug, Clone, Deserialize, Validate)]
-pub struct ServerConfig {
-    /// Host or IP address to bind to. Defaults to `0.0.0.0`.
-    #[validate(length(min = 1, message = "server host must not be empty"))]
-    pub host: String,
-    /// TCP port to listen on. Defaults to `8080`.
-    #[validate(range(min = 1, message = "server port must be a valid port (1-65535)"))]
-    pub port: u16,
-}
-
 /// Rejects an empty exporter list, or any entry that is not an `http(s)://` URL:
 /// the aggregator has nothing to aggregate without exporters, and a URL it cannot
 /// reach would only fail later at request time.
@@ -91,6 +80,17 @@ fn validate_machines(machines: &Vec<String>) -> Result<(), ValidationError> {
         }
     }
     Ok(())
+}
+
+/// HTTP server binding configuration.
+#[derive(Debug, Clone, Deserialize, Validate)]
+pub struct ServerConfig {
+    /// Host or IP address to bind to. Defaults to `0.0.0.0`.
+    #[validate(length(min = 1, message = "server host must not be empty"))]
+    pub host: String,
+    /// TCP port to listen on. Defaults to `8080`.
+    #[validate(range(min = 1, message = "server port must be a valid port (1-65535)"))]
+    pub port: u16,
 }
 
 impl Config {
