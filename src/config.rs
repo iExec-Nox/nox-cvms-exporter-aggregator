@@ -54,7 +54,6 @@ pub struct ServerConfig {
 /// Rejects an empty exporter list, or any entry that is not an `http(s)://` URL:
 /// the aggregator has nothing to aggregate without exporters, and a URL it cannot
 /// reach would only fail later at request time.
-#[allow(clippy::ptr_arg)]
 fn validate_exporters(exporters: &Vec<String>) -> Result<(), ValidationError> {
     if exporters.is_empty() {
         return Err(
@@ -78,7 +77,6 @@ fn validate_exporters(exporters: &Vec<String>) -> Result<(), ValidationError> {
 /// Rejects any `machines` entry that is not a well-formed `machine_id=suffix_url`
 /// pair (missing `=`, empty key, or empty value): such an entry would leave its
 /// CVMs unaddressable, so we stop at startup rather than silently skip it.
-#[allow(clippy::ptr_arg)]
 fn validate_machines(machines: &Vec<String>) -> Result<(), ValidationError> {
     for entry in machines {
         let well_formed = entry
