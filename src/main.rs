@@ -2,6 +2,7 @@ pub mod aggregation;
 pub mod application;
 pub mod config;
 pub mod error;
+mod extract;
 pub mod handlers;
 pub mod types;
 

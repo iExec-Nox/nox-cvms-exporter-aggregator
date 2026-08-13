@@ -1,3 +1,4 @@
+use axum::extract::rejection::JsonRejection;
 use axum::{
     Json,
     http::StatusCode,
@@ -18,6 +19,19 @@ pub(crate) enum AppError {
     /// 500 — JSON (de)serialization failure, converted via `?`.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// 4xx — request body rejected at extraction, carrying the status axum
+    /// inferred (see [`crate::extract::JsonBody`]).
+    #[error("{message}")]
+    InvalidBody { status: StatusCode, message: String },
+}
+
+impl From<JsonRejection> for AppError {
+    fn from(rejection: JsonRejection) -> Self {
+        AppError::InvalidBody {
+            status: rejection.status(),
+            message: rejection.body_text(),
+        }
+    }
 }
 
 impl AppError {
@@ -25,6 +39,7 @@ impl AppError {
         match self {
             AppError::Internal(_) => "internal",
             AppError::Serialization(_) => "serialization",
+            AppError::InvalidBody { .. } => "invalid_body",
         }
     }
 
@@ -32,6 +47,7 @@ impl AppError {
         match self {
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::InvalidBody { status, .. } => *status,
         }
     }
 }

@@ -117,6 +117,19 @@ For every target the aggregator rebuilds the CVM base URL from the machine's con
 - A target whose `machine_id` is **not** in the `machines` config is logged and **dropped**: the aggregator refuses to address a machine outside its own config, which also bounds every rebuilt URL to a trusted domain.
 - An instance whose quote or info fetch fails is logged and **dropped** from the response, so one unreachable CVM does not abort the whole call.
 
+## Error responses
+
+Every error — raised by a handler or by request-body validation — is returned as a JSON envelope carrying the failure's HTTP status:
+
+```json
+{ "error": "invalid_body", "message": "…" }
+```
+
+- `error`: short machine-readable code (`invalid_body`, `internal`, `serialization`).
+- `message`: human-readable description.
+
+A malformed request body uses this **same** envelope (never a plain-text response): invalid JSON → `400`, a field that fails validation (ill-sized `challenge`, non-hex `app_id`/`instance_id`) → `422`, wrong content type → `415`.
+
 ## Configuration
 
 All settings are loaded from environment variables prefixed with `NOX_CVMS_EXPORTER_AGGREGATOR_`.  
