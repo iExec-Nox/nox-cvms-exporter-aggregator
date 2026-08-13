@@ -244,7 +244,7 @@ async fn discover_instances(
         .config
         .exporters
         .iter()
-        .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url));
+        .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url.as_str()));
     let results = futures::future::join_all(futures).await;
 
     // 2. Split successes from failures, isolating per-exporter errors.

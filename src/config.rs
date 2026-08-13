@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use config::{Config as ConfigBuilder, ConfigError, Environment};
 use serde::Deserialize;
 use tracing::debug;
+use url::Url;
 use validator::{Validate, ValidationError};
 
 /// Top-level application configuration.
@@ -20,9 +21,17 @@ pub struct Config {
     #[validate(nested)]
     pub server: ServerConfig,
     /// Base URLs of the per-machine `nox-cvms-exporter` instances to query
-    /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list.
-    #[validate(custom(function = "validate_exporters"))]
-    pub exporters: Vec<String>,
+    /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list; each
+    /// entry is parsed as a URL at load time, required to be non-empty
+    /// (`length`), and checked to be `http(s)` by [`validate_exporter_schemes`].
+    #[validate(
+        length(
+            min = 1,
+            message = "at least one exporter must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS)"
+        ),
+        custom(function = "validate_exporter_schemes")
+    )]
+    pub exporters: Vec<Url>,
     /// Per-request timeout, in seconds, when querying a machine exporter.
     #[validate(range(min = 1, message = "request_timeout_secs must be at least 1"))]
     pub request_timeout_secs: u64,
@@ -40,22 +49,14 @@ pub struct Config {
     pub machines: Vec<String>,
 }
 
-/// Rejects an empty exporter list, or any entry that is not an `http(s)://` URL:
-/// the aggregator has nothing to aggregate without exporters, and a URL it cannot
-/// reach would only fail later at request time.
-fn validate_exporters(exporters: &Vec<String>) -> Result<(), ValidationError> {
-    if exporters.is_empty() {
-        return Err(
-            ValidationError::new("exporters_empty").with_message(Cow::from(
-                "at least one exporter must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS)",
-            )),
-        );
-    }
+/// Rejects any exporter URL whose scheme is not `http`/`https` — the aggregator
+/// only speaks HTTP(S) to them. Non-emptiness is enforced separately by `length`.
+fn validate_exporter_schemes(exporters: &[Url]) -> Result<(), ValidationError> {
     for url in exporters {
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
+        if !matches!(url.scheme(), "http" | "https") {
             return Err(
-                ValidationError::new("exporter_invalid_url").with_message(Cow::from(format!(
-                    "invalid exporter URL {url:?}: must start with http:// or https://"
+                ValidationError::new("exporter_invalid_scheme").with_message(Cow::from(format!(
+                    "invalid exporter URL {url}: scheme must be http or https"
                 ))),
             );
         }
@@ -160,7 +161,10 @@ mod tests {
                 host: "0.0.0.0".to_owned(),
                 port: 8080,
             },
-            exporters: exporters.iter().map(|s| (*s).to_owned()).collect(),
+            exporters: exporters
+                .iter()
+                .map(|s| s.parse().expect("valid test url"))
+                .collect(),
             request_timeout_secs: 10,
             max_inflight: 2,
             quote_service_port: 9999,
@@ -187,6 +191,19 @@ mod tests {
     #[test]
     fn validate_rejects_empty_exporters() {
         let err = config(&[], &["m-a=node-a.example"]).validate().unwrap_err();
+
+        assert!(
+            err.errors().contains_key("exporters"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_non_http_exporter() {
+        // A valid URL, but the scheme is not http/https.
+        let err = config(&["ftp://node-a"], &["m-a=node-a.example"])
+            .validate()
+            .unwrap_err();
 
         assert!(
             err.errors().contains_key("exporters"),
@@ -223,18 +240,6 @@ mod tests {
 
         assert!(
             err.errors().contains_key("machines"),
-            "error should name the offending field: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_an_exporter_without_a_scheme() {
-        let err = config(&["node-a:8080"], &["m-a=node-a.example"])
-            .validate()
-            .unwrap_err();
-
-        assert!(
-            err.errors().contains_key("exporters"),
             "error should name the offending field: {err}"
         );
     }
