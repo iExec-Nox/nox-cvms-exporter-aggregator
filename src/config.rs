@@ -23,7 +23,7 @@ pub struct Config {
     /// Port of the quote service exposed by every CVM. Used, together with the
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
     pub quote_service_port: u16,
-    /// Per-machine URL suffixes, as `machine_id=suffixe_url` pairs (comma-separated).
+    /// Per-machine URL suffixes, as `machine_id=suffix_url` pairs (comma-separated).
     pub machines: Vec<String>,
 }
 
@@ -69,7 +69,7 @@ impl Config {
         addr
     }
 
-    /// Parses `machines` (`machine_id=suffixe_url` pairs) into a lookup map.
+    /// Parses `machines` (`machine_id=suffix_url` pairs) into a lookup map.
     ///
     /// Entries without a `=` separator are skipped. Whitespace around each key
     /// and value is trimmed.
@@ -77,7 +77,7 @@ impl Config {
         self.machines
             .iter()
             .filter_map(|entry| entry.split_once('='))
-            .map(|(id, suffixe)| (id.trim().to_owned(), suffixe.trim().to_owned()))
+            .map(|(id, suffix)| (id.trim().to_owned(), suffix.trim().to_owned()))
             .collect()
     }
 }
