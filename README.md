@@ -130,7 +130,7 @@ Nested keys use `__` as separator (e.g. `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__PO
 | `NOX_CVMS_EXPORTER_AGGREGATOR_REQUEST_TIMEOUT_SECS` | `10` | Per-request timeout, in seconds, when querying an exporter or a CVM |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_MAX_INFLIGHT` | `2` | Max instances attested concurrently (each issues `/quote` + `/info`) |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_QUOTE_SERVICE_PORT` | `9999` | Port of the quote service exposed by every CVM, used to rebuild CVM URLs |
-| `NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES` | _(empty)_ | Comma-separated `machine_id=suffix_url` pairs, used to rebuild each CVM's URL as `https://<instance_id>-<quote_service_port>.<suffix_url>` |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES` | _(required)_ | Comma-separated `machine_id=suffix_url` pairs, used to rebuild each CVM's URL as `https://<instance_id>-<quote_service_port>.<suffix_url>`. At least one is required — startup fails if the map is empty. |
 
 The exporter list accepts plain HTTP or HTTPS URLs, with an optional port:
 
