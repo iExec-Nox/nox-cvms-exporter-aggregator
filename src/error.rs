@@ -1,3 +1,4 @@
+use axum::extract::rejection::JsonRejection;
 use axum::{
     Json,
     http::StatusCode,
@@ -11,37 +12,37 @@ use thiserror::Error;
 /// Variants wrapping a foreign error (`#[from]`) let the `?` operator convert
 /// automatically — prefer adding a new `#[from]` variant over calling `map_err`.
 #[derive(Debug, Error)]
-pub enum AppError {
-    /// 400 — malformed or missing request input (e.g. absent `challenge`).
-    #[error("Bad request: {0}")]
-    BadRequest(String),
-    /// 404 — target resource does not exist.
-    #[error("Not found: {0}")]
-    NotFound(String),
+pub(crate) enum AppError {
     /// 500 — unclassified internal failure.
     #[error("Internal error: {0}")]
     Internal(String),
-    /// 500 — JSON (de)serialization failure, converted via `?`.
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    /// 4xx — request body rejected at extraction, carrying the status axum
+    /// inferred (see [`crate::extract::JsonBody`]).
+    #[error("{message}")]
+    InvalidBody { status: StatusCode, message: String },
+}
+
+impl From<JsonRejection> for AppError {
+    fn from(rejection: JsonRejection) -> Self {
+        AppError::InvalidBody {
+            status: rejection.status(),
+            message: rejection.body_text(),
+        }
+    }
 }
 
 impl AppError {
     fn error_code(&self) -> &'static str {
         match self {
-            AppError::BadRequest(_) => "bad_request",
-            AppError::NotFound(_) => "not_found",
             AppError::Internal(_) => "internal",
-            AppError::Serialization(_) => "serialization",
+            AppError::InvalidBody { .. } => "invalid_body",
         }
     }
 
     fn status_code(&self) -> StatusCode {
         match self {
-            AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::InvalidBody { status, .. } => *status,
         }
     }
 }

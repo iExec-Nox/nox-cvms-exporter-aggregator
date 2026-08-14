@@ -55,25 +55,94 @@ pub struct TcbInfo {
 // `GET /cvms` listing, so the aggregator addresses exactly the CVMs the user
 // asked to verify — without re-querying the exporters.
 
+/// A 40-character hex identifier — the shape produced by `openssl rand -hex 20`
+/// (20 random bytes → 40 hex characters).
+///
+/// Deserialization rejects anything that is not exactly 40 hexadecimal
+/// characters, so a malformed `app_id`/`instance_id` can never reach the
+/// handler. Upper- and lower-case are both accepted; the value is stored verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HexId(String);
+
+impl HexId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for HexId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Ok(Self(s))
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "expected a 40-character hex id, got {s:?}"
+            )))
+        }
+    }
+}
+
 /// A single instance the UI wants attested.
 ///
 /// `instance_id` + `machine_id` address the CVM (its base URL is rebuilt from the
 /// machine's configured URL suffix); `app_id` + `name` are only used to regroup
-/// the response into `EnrichedCvmSummary`.
+/// the response into `EnrichedCvmSummary`. `app_id`/`instance_id` are validated
+/// as 40-char hex ids (see [`HexId`]).
 #[derive(Debug, Deserialize)]
 pub struct AttestationTarget {
-    pub app_id: String,
+    pub app_id: HexId,
     pub name: String,
-    pub instance_id: String,
+    pub instance_id: HexId,
     pub machine_id: String,
+}
+
+/// The verifier's fresh nonce, relayed to each targeted CVM's `/quote?data=…`
+/// endpoint so the returned quote is bound to it (anti-replay / freshness).
+///
+/// The quote service consumes `data` via `String::into_bytes()` and requires
+/// exactly 64 bytes of report data, so the challenge must be exactly 64 bytes
+/// (`String::len()` is the byte length). Deserialization rejects any other
+/// length, and the field is mandatory — so a missing or ill-sized challenge is a
+/// `422` serde rejection.
+#[derive(Debug, Clone)]
+pub struct Challenge(String);
+
+impl Challenge {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Challenge {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() == 64 {
+            Ok(Self(s))
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "challenge must be exactly 64 bytes, got {}",
+                s.len()
+            )))
+        }
+    }
 }
 
 /// Body of `POST /cvms/attestations`.
 #[derive(Debug, Deserialize)]
 pub struct AttestationRequest {
-    /// Fresh verifier nonce, relayed to each targeted CVM's `/quote` endpoint so
-    /// the returned quote is bound to it (anti-replay / freshness guarantee).
-    pub challenge: String,
+    /// Fresh 64-byte verifier nonce (see [`Challenge`]). Mandatory.
+    pub challenge: Challenge,
     /// Instances to attest, echoed from a prior listing. Granularity is entirely
     /// the caller's: one instance, all instances of an app, or everything.
     pub instances: Vec<AttestationTarget>,
@@ -96,3 +165,64 @@ pub struct EnrichedCvmInstance {
 
 /// Per-app grouping of enriched instances — the `POST /cvms/attestations` response.
 pub type EnrichedCvmSummary = Summary<EnrichedCvmInstance>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_hex_id(s: &str) -> Result<HexId, serde_json::Error> {
+        serde_json::from_value(serde_json::Value::String(s.to_owned()))
+    }
+
+    #[test]
+    fn hex_id_accepts_40_hex_chars() {
+        let id = parse_hex_id("f2a1d97f40460d5091879c7373fdb7a853b52691")
+            .expect("a 40-char hex string is a valid id");
+
+        assert_eq!(id.as_str(), "f2a1d97f40460d5091879c7373fdb7a853b52691");
+    }
+
+    #[test]
+    fn hex_id_accepts_uppercase_hex() {
+        assert!(parse_hex_id("F2A1D97F40460D5091879C7373FDB7A853B52691").is_ok());
+    }
+
+    #[test]
+    fn hex_id_rejects_wrong_length() {
+        assert!(parse_hex_id("deadbeef").is_err());
+    }
+
+    #[test]
+    fn hex_id_rejects_non_hex_character() {
+        // 40 characters, but the leading `g` is not hexadecimal.
+        assert!(parse_hex_id("g2a1d97f40460d5091879c7373fdb7a853b52691").is_err());
+    }
+
+    fn parse_challenge(s: &str) -> Result<Challenge, serde_json::Error> {
+        serde_json::from_value(serde_json::Value::String(s.to_owned()))
+    }
+
+    #[test]
+    fn challenge_accepts_exactly_64_bytes() {
+        let raw = "a".repeat(64);
+
+        let challenge = parse_challenge(&raw).expect("a 64-byte string is a valid challenge");
+
+        assert_eq!(challenge.as_str().len(), 64);
+    }
+
+    #[test]
+    fn challenge_rejects_other_lengths() {
+        assert!(parse_challenge(&"a".repeat(63)).is_err());
+        assert!(parse_challenge(&"a".repeat(65)).is_err());
+        assert!(parse_challenge("").is_err());
+    }
+
+    #[test]
+    fn attestation_request_requires_challenge() {
+        // No `challenge` field: a non-`Option` field makes this a hard error.
+        let json = serde_json::json!({ "instances": [] });
+
+        assert!(serde_json::from_value::<AttestationRequest>(json).is_err());
+    }
+}

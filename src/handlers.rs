@@ -10,6 +10,7 @@ use tracing::warn;
 use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
+use crate::extract::JsonBody;
 use crate::types::{
     AttestationRequest, CvmInstance, CvmSummary, EnrichedCvmInstance, EnrichedCvmSummary,
     ExporterInfo, QuoteResponse,
@@ -294,7 +295,7 @@ async fn discover_instances(
 ///
 /// Unreachable or failing exporters are skipped so a single faulty machine does
 /// not abort the listing; the request only fails if *every* exporter fails.
-pub async fn get_active_cvms(
+pub(crate) async fn get_active_cvms(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CvmSummary>>, AppError> {
     // 1. Discover every active instance across all exporters.
@@ -328,17 +329,15 @@ pub async fn get_active_cvms(
 /// `machine_id` is absent from the routing config (so cannot be addressed inside
 /// a trusted domain), or whose fetch fails, are dropped (logged).
 ///
-/// Requires a non-empty `challenge`; returns `400` otherwise.
-pub async fn post_attestations(
+/// The `challenge` is mandatory and validated as exactly 64 bytes at
+/// deserialization (see `Challenge`); a missing or ill-sized value is rejected
+/// with `422` before this handler runs.
+pub(crate) async fn post_attestations(
     State(state): State<AppState>,
-    Json(request): Json<AttestationRequest>,
+    JsonBody(request): JsonBody<AttestationRequest>,
 ) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
-    // 0. A fresh challenge is mandatory (relayed to each CVM's /quote — see doc).
-    if request.challenge.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "missing required field: challenge".to_owned(),
-        ));
-    }
+    // 0. The challenge is already validated by its type — relay it as-is.
+    let challenge = request.challenge;
 
     // 1. Resolve each target's base URL; drop targets whose machine_id isn't
     //    configured (see doc).
@@ -351,17 +350,19 @@ pub async fn post_attestations(
         .filter_map(
             |target| match machine_suffixes.get(target.machine_id.as_str()) {
                 Some(suffix) => {
-                    let url = build_cvm_url(&target.instance_id, quote_service_port, suffix);
+                    let url =
+                        build_cvm_url(target.instance_id.as_str(), quote_service_port, suffix);
                     let instance = CvmInstance {
-                        instance_id: target.instance_id,
+                        instance_id: target.instance_id.into_inner(),
                         machine_id: target.machine_id,
                     };
-                    Some((target.app_id, target.name, instance, url))
+                    Some((target.app_id.into_inner(), target.name, instance, url))
                 }
                 None => {
                     warn!(
                         "dropping target {}: no url suffix configured for machine_id {}",
-                        target.instance_id, target.machine_id
+                        target.instance_id.as_str(),
+                        target.machine_id
                     );
                     None
                 }
@@ -372,7 +373,7 @@ pub async fn post_attestations(
     // 2. Enrich (bounded concurrency) and regroup by `app_id`.
     let ui_summaries = enrich_and_group(
         &state.http_client,
-        &request.challenge,
+        challenge.as_str(),
         state.config.max_inflight,
         resolved,
     )

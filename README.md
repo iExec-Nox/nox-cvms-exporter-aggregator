@@ -46,11 +46,11 @@ Queries every configured exporter concurrently and returns their active CVMs mer
 ```json
 [
   {
-    "app_id": "a1b2c3...",
+    "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
     "name": "my-app",
     "instances": [
       {
-        "instance_id": "i-0abc123",
+        "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
         "machine_id": "machine-a"
       }
     ]
@@ -71,12 +71,12 @@ Enriches a caller-selected set of instances with their attestation data, **witho
 
 ```json
 {
-  "challenge": "<fresh-verifier-nonce>",
+  "challenge": "a3f5c9e18b7d24609f1e8c3a5b7d90f24e6c8a1b3d5f79021c2b3a495d6e7f80",
   "instances": [
     {
-      "app_id": "a1b2c3...",
+      "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
       "name": "my-app",
-      "instance_id": "i-0abc123",
+      "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
       "machine_id": "machine-a"
     }
   ]
@@ -85,8 +85,8 @@ Enriches a caller-selected set of instances with their attestation data, **witho
 
 | Field | Required | Description |
 |---|---|---|
-| `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
-| `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. |
+| `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). Must be **exactly 64 bytes** (a 64-character string — e.g. 32 random bytes hex-encoded), since the CVM quote service uses it as the 64-byte report data. Mandatory and validated at deserialization; a missing or ill-sized `challenge` returns `422 Unprocessable Entity`. |
+| `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. `app_id` and `instance_id` are 40-character hex ids — 20 random bytes (`openssl rand -hex 20`) — and are validated as such (otherwise `422`). |
 
 For every target the aggregator rebuilds the CVM base URL from the machine's configured URL suffix, then fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.
 
@@ -95,11 +95,11 @@ For every target the aggregator rebuilds the CVM base URL from the machine's con
 ```json
 [
   {
-    "app_id": "a1b2c3...",
+    "app_id": "bcb20c8df0f123145b8975079e30211128be421e",
     "name": "my-app",
     "instances": [
       {
-        "instance_id": "i-0abc123",
+        "instance_id": "bb3cc7d7b022cdf7359352bd4f5d372697bf6f52",
         "machine_id": "machine-a",
         "quote": {
           "quote": "0400020081...",
@@ -116,6 +116,19 @@ For every target the aggregator rebuilds the CVM base URL from the machine's con
 
 - A target whose `machine_id` is **not** in the `machines` config is logged and **dropped**: the aggregator refuses to address a machine outside its own config, which also bounds every rebuilt URL to a trusted domain.
 - An instance whose quote or info fetch fails is logged and **dropped** from the response, so one unreachable CVM does not abort the whole call.
+
+## Error responses
+
+Every error — raised by a handler or by request-body validation — is returned as a JSON envelope carrying the failure's HTTP status:
+
+```json
+{ "error": "invalid_body", "message": "…" }
+```
+
+- `error`: short machine-readable code (`invalid_body`, `internal`).
+- `message`: human-readable description.
+
+A malformed request body uses this **same** envelope (never a plain-text response): invalid JSON → `400`, a field that fails validation (ill-sized `challenge`, non-hex `app_id`/`instance_id`) → `422`, wrong content type → `415`.
 
 ## Configuration
 
