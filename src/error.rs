@@ -16,9 +16,6 @@ pub(crate) enum AppError {
     /// 500 — unclassified internal failure.
     #[error("Internal error: {0}")]
     Internal(String),
-    /// 500 — JSON (de)serialization failure, converted via `?`.
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
     /// 4xx — request body rejected at extraction, carrying the status axum
     /// inferred (see [`crate::extract::JsonBody`]).
     #[error("{message}")]
@@ -38,7 +35,6 @@ impl AppError {
     fn error_code(&self) -> &'static str {
         match self {
             AppError::Internal(_) => "internal",
-            AppError::Serialization(_) => "serialization",
             AppError::InvalidBody { .. } => "invalid_body",
         }
     }
@@ -46,7 +42,6 @@ impl AppError {
     fn status_code(&self) -> StatusCode {
         match self {
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::InvalidBody { status, .. } => *status,
         }
     }
