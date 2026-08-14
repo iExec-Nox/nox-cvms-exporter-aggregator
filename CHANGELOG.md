@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/compare/v0.2.0...v1.0.0) (2026-08-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* cvms listing and on demand attestation ([#8](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/issues/8))
+
+### Features
+
+* cvms listing and on demand attestation ([#8](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/issues/8)) ([baa2333](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/commit/baa2333b97229877308c5e42afcb891a3068733f))
+* validate request bodies and error envelope ([#10](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/issues/10)) ([eb4085f](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/commit/eb4085f72d537934d875020efb557abde9e23c20))
+
+
+### Bug Fixes
+
+* validate configuration fail fast ([#9](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/issues/9)) ([c069584](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/commit/c069584bfcf74bfe0eaaeccc7357762d60850101))
+
 ## [0.2.0](https://github.com/iExec-Nox/nox-cvms-exporter-aggregator/compare/v0.1.0...v0.2.0) (2026-07-20)
 
 
