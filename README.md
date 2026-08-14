@@ -125,7 +125,7 @@ Every error — raised by a handler or by request-body validation — is returne
 { "error": "invalid_body", "message": "…" }
 ```
 
-- `error`: short machine-readable code (`invalid_body`, `internal`, `serialization`).
+- `error`: short machine-readable code (`invalid_body`, `internal`).
 - `message`: human-readable description.
 
 A malformed request body uses this **same** envelope (never a plain-text response): invalid JSON → `400`, a field that fails validation (ill-sized `challenge`, non-hex `app_id`/`instance_id`) → `422`, wrong content type → `415`.
