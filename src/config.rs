@@ -1,38 +1,105 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use config::{Config as ConfigBuilder, ConfigError, Environment};
 use serde::Deserialize;
 use tracing::debug;
+use url::Url;
+use validator::{Validate, ValidationError};
 
 /// Top-level application configuration.
 ///
 /// Loaded from environment variables prefixed with `NOX_CVMS_EXPORTER_AGGREGATOR_`,
 /// using `__` as the nesting separator (e.g. `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__PORT=9000`).
-#[derive(Debug, Clone, Deserialize)]
+///
+/// Field-level `#[validate(...)]` attributes let [`validator`] reject a
+/// configuration that would misbehave at runtime; call [`Validate::validate`]
+/// after loading (see `main`).
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct Config {
     /// HTTP server settings.
+    #[validate(nested)]
     pub server: ServerConfig,
     /// Base URLs of the per-machine `nox-cvms-exporter` instances to query
-    /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list.
-    pub exporters: Vec<String>,
+    /// (e.g. `http://10.0.0.1:8080`). Provided as a comma-separated list; each
+    /// entry is parsed as a URL at load time, required to be non-empty
+    /// (`length`), and checked to be `http(s)` by [`validate_exporter_schemes`].
+    #[validate(
+        length(
+            min = 1,
+            message = "at least one exporter must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS)"
+        ),
+        custom(function = "validate_exporter_schemes")
+    )]
+    pub exporters: Vec<Url>,
     /// Per-request timeout, in seconds, when querying a machine exporter.
+    #[validate(range(min = 1, message = "request_timeout_secs must be at least 1"))]
     pub request_timeout_secs: u64,
-    /// Max instances enriched concurrently on `GET /cvms` (each enrichment issues
-    /// two requests: `/quote` + `/info`). Bounds the load on the CVM nodes.
+    /// Max instances enriched concurrently on `POST /cvms/attestations` (each
+    /// enrichment issues two requests: `/quote` + `/info`). Bounds the load on
+    /// the CVM nodes.
+    #[validate(range(min = 1, message = "max_inflight must be at least 1"))]
     pub max_inflight: usize,
     /// Port of the quote service exposed by every CVM. Used, together with the
     /// per-machine URL suffix, to rebuild each CVM's base URL locally.
+    #[validate(range(min = 1, message = "quote_service_port must be a valid port (1-65535)"))]
     pub quote_service_port: u16,
-    /// Per-machine URL suffixes, as `machine_id=suffixe_url` pairs (comma-separated).
+    /// Per-machine URL suffixes, as `machine_id=suffix_url` pairs (comma-separated).
+    #[validate(custom(function = "validate_machines"))]
     pub machines: Vec<String>,
 }
 
+/// Rejects any exporter URL whose scheme is not `http`/`https` — the aggregator
+/// only speaks HTTP(S) to them. Non-emptiness is enforced separately by `length`.
+fn validate_exporter_schemes(exporters: &[Url]) -> Result<(), ValidationError> {
+    for url in exporters {
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(
+                ValidationError::new("exporter_invalid_scheme").with_message(Cow::from(format!(
+                    "invalid exporter URL {url}: scheme must be http or https"
+                ))),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Rejects an empty `machines` map, or any entry that is not a well-formed
+/// `machine_id=suffix_url` pair (missing `=`, empty key, or empty value): without
+/// at least one mapping no CVM can be addressed for attestation, and a malformed
+/// entry would leave its CVMs unaddressable — so we stop at startup rather than
+/// silently carry on.
+fn validate_machines(machines: &Vec<String>) -> Result<(), ValidationError> {
+    if machines.is_empty() {
+        return Err(
+            ValidationError::new("machines_empty").with_message(Cow::from(
+                "at least one machine must be configured (NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES)",
+            )),
+        );
+    }
+    for entry in machines {
+        let well_formed = entry
+            .split_once('=')
+            .is_some_and(|(id, suffix)| !id.trim().is_empty() && !suffix.trim().is_empty());
+        if !well_formed {
+            return Err(
+                ValidationError::new("invalid_machines_entry").with_message(Cow::from(format!(
+                    "invalid `machines` entry {entry:?}: expected `machine_id=suffix_url`"
+                ))),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// HTTP server binding configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct ServerConfig {
     /// Host or IP address to bind to. Defaults to `0.0.0.0`.
+    #[validate(length(min = 1, message = "server host must not be empty"))]
     pub host: String,
     /// TCP port to listen on. Defaults to `8080`.
+    #[validate(range(min = 1, message = "server port must be a valid port (1-65535)"))]
     pub port: u16,
 }
 
@@ -69,15 +136,17 @@ impl Config {
         addr
     }
 
-    /// Parses `machines` (`machine_id=suffixe_url` pairs) into a lookup map.
+    /// Parses `machines` (`machine_id=suffix_url` pairs) into a lookup map,
+    /// trimming whitespace around each key and value.
     ///
-    /// Entries without a `=` separator are skipped. Whitespace around each key
-    /// and value is trimmed.
+    /// Malformed entries are rejected upstream by [`validate_machines`], so the
+    /// defensive `filter_map` never actually skips anything once the config has
+    /// been validated.
     pub fn machine_suffixes(&self) -> HashMap<String, String> {
         self.machines
             .iter()
             .filter_map(|entry| entry.split_once('='))
-            .map(|(id, suffixe)| (id.trim().to_owned(), suffixe.trim().to_owned()))
+            .map(|(id, suffix)| (id.trim().to_owned(), suffix.trim().to_owned()))
             .collect()
     }
 }
@@ -86,13 +155,16 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn config_with_machines(machines: &[&str]) -> Config {
+    fn config(exporters: &[&str], machines: &[&str]) -> Config {
         Config {
             server: ServerConfig {
                 host: "0.0.0.0".to_owned(),
                 port: 8080,
             },
-            exporters: Vec::new(),
+            exporters: exporters
+                .iter()
+                .map(|s| s.parse().expect("valid test url"))
+                .collect(),
             request_timeout_secs: 10,
             max_inflight: 2,
             quote_service_port: 9999,
@@ -102,9 +174,7 @@ mod tests {
 
     #[test]
     fn machine_suffixes_parses_pairs_and_trims() {
-        let config = config_with_machines(&["m-a = node-a.example ", "m-b=node-b.example"]);
-
-        let map = config.machine_suffixes();
+        let map = config(&[], &["m-a = node-a.example ", "m-b=node-b.example"]).machine_suffixes();
 
         assert_eq!(map.get("m-a").map(String::as_str), Some("node-a.example"));
         assert_eq!(map.get("m-b").map(String::as_str), Some("node-b.example"));
@@ -112,12 +182,105 @@ mod tests {
     }
 
     #[test]
-    fn machine_suffixes_skips_malformed_entries() {
-        let config = config_with_machines(&["no-separator", "m-a=node-a.example"]);
+    fn validate_accepts_a_well_formed_config() {
+        let config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
 
-        let map = config.machine_suffixes();
+        assert!(config.validate().is_ok());
+    }
 
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("m-a").map(String::as_str), Some("node-a.example"));
+    #[test]
+    fn validate_rejects_empty_exporters() {
+        let err = config(&[], &["m-a=node-a.example"]).validate().unwrap_err();
+
+        assert!(
+            err.errors().contains_key("exporters"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_non_http_exporter() {
+        // A valid URL, but the scheme is not http/https.
+        let err = config(&["ftp://node-a"], &["m-a=node-a.example"])
+            .validate()
+            .unwrap_err();
+
+        assert!(
+            err.errors().contains_key("exporters"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_machines_entry_without_separator() {
+        let err = config(&["http://node-a:8080"], &["no-separator"])
+            .validate()
+            .unwrap_err();
+
+        assert!(
+            err.errors().contains_key("machines"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_machines_entry_with_an_empty_value() {
+        assert!(
+            config(&["http://node-a:8080"], &["m-a="])
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_machines() {
+        // No machine mapping at all (e.g. the env var is unset) must fail: nothing
+        // could be attested.
+        let err = config(&["http://node-a:8080"], &[]).validate().unwrap_err();
+
+        assert!(
+            err.errors().contains_key("machines"),
+            "error should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_request_timeout() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.request_timeout_secs = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_inflight() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.max_inflight = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_quote_service_port() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.quote_service_port = 0;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_server_host() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.server.host = String::new();
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_a_zero_server_port() {
+        let mut config = config(&["http://node-a:8080"], &["m-a=node-a.example"]);
+        config.server.port = 0;
+
+        assert!(config.validate().is_err());
     }
 }

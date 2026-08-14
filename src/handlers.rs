@@ -56,12 +56,12 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
 }
 
 /// Rebuilds a CVM's base URL from its instance id and the per-machine routing
-/// config: `https://<instance_id>-<quote_service_port>.<suffixe_url>`.
+/// config: `https://<instance_id>-<quote_service_port>.<suffix_url>`.
 ///
 /// The exporter no longer exposes the URL; the aggregator owns URL construction,
 /// keeping the internal CVM address out of both the exporter response and the UI.
-fn build_cvm_url(instance_id: &str, quote_service_port: u16, suffixe_url: &str) -> String {
-    format!("https://{instance_id}-{quote_service_port}.{suffixe_url}")
+fn build_cvm_url(instance_id: &str, quote_service_port: u16, suffix_url: &str) -> String {
+    format!("https://{instance_id}-{quote_service_port}.{suffix_url}")
 }
 
 /// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.
@@ -244,7 +244,7 @@ async fn discover_instances(
         .config
         .exporters
         .iter()
-        .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url));
+        .map(|base_url| fetch_exporter_cvms(&state.http_client, base_url.as_str()));
     let results = futures::future::join_all(futures).await;
 
     // 2. Split successes from failures, isolating per-exporter errors.
@@ -343,14 +343,15 @@ pub async fn post_attestations(
     // 1. Resolve each target's base URL; drop targets whose machine_id isn't
     //    configured (see doc).
     let quote_service_port = state.config.quote_service_port;
-    let machine_suffixes = state.config.machine_suffixes();
+    // Parsed once at startup and cached in state — no per-request re-parsing.
+    let machine_suffixes = &state.machine_suffixes;
     let resolved: Vec<(String, String, CvmInstance, String)> = request
         .instances
         .into_iter()
         .filter_map(
             |target| match machine_suffixes.get(target.machine_id.as_str()) {
-                Some(suffixe) => {
-                    let url = build_cvm_url(&target.instance_id, quote_service_port, suffixe);
+                Some(suffix) => {
+                    let url = build_cvm_url(&target.instance_id, quote_service_port, suffix);
                     let instance = CvmInstance {
                         instance_id: target.instance_id,
                         machine_id: target.machine_id,
@@ -554,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn build_cvm_url_combines_instance_port_and_suffixe() {
+    fn build_cvm_url_combines_instance_port_and_suffix() {
         assert_eq!(
             build_cvm_url("i-abc", 9999, "node1.apps.example.dev"),
             "https://i-abc-9999.node1.apps.example.dev"
