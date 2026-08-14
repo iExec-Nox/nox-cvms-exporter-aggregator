@@ -6,16 +6,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CvmInstance {
     pub instance_id: String,
-    pub url: String,
     pub machine_id: String,
 }
 
+/// A per-app CVM group: the instances of one application, keyed by `app_id`.
+///
+/// Generic over the instance type so the same shape — and the same `app_id`
+/// merge (`merge_cvms`) — serves both the plain listing (`CvmInstance`) and the
+/// enriched attestation response (`EnrichedCvmInstance`).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CvmSummary {
+pub struct Summary<I> {
     pub app_id: String,
     pub name: String,
-    pub instances: Vec<CvmInstance>,
+    pub instances: Vec<I>,
 }
+
+/// Per-app grouping of plain (un-enriched) instances — the `GET /cvms` listing.
+pub type CvmSummary = Summary<CvmInstance>;
 
 /// Attestation data extracted from an exporter's `/quote?data=<challenge>`
 /// endpoint and forwarded to the UI.
@@ -43,6 +50,35 @@ pub struct TcbInfo {
     pub app_compose: String,
 }
 
+// ── Attestation request (UI-facing input) ───────────────────────────────────
+// Body of `POST /cvms/attestations`. The UI echoes back instances from a prior
+// `GET /cvms` listing, so the aggregator addresses exactly the CVMs the user
+// asked to verify — without re-querying the exporters.
+
+/// A single instance the UI wants attested.
+///
+/// `instance_id` + `machine_id` address the CVM (its base URL is rebuilt from the
+/// machine's configured URL suffix); `app_id` + `name` are only used to regroup
+/// the response into `EnrichedCvmSummary`.
+#[derive(Debug, Deserialize)]
+pub struct AttestationTarget {
+    pub app_id: String,
+    pub name: String,
+    pub instance_id: String,
+    pub machine_id: String,
+}
+
+/// Body of `POST /cvms/attestations`.
+#[derive(Debug, Deserialize)]
+pub struct AttestationRequest {
+    /// Fresh verifier nonce, relayed to each targeted CVM's `/quote` endpoint so
+    /// the returned quote is bound to it (anti-replay / freshness guarantee).
+    pub challenge: String,
+    /// Instances to attest, echoed from a prior listing. Granularity is entirely
+    /// the caller's: one instance, all instances of an app, or everything.
+    pub instances: Vec<AttestationTarget>,
+}
+
 // ── UI-facing types ─────────────────────────────────────────────────────────
 // Returned by the aggregator's `/cvms` endpoint. Unlike `CvmInstance`, these
 // carry the attestation data fetched by the aggregator instead of the raw CVM
@@ -58,9 +94,5 @@ pub struct EnrichedCvmInstance {
     pub app_compose: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct EnrichedCvmSummary {
-    pub app_id: String,
-    pub name: String,
-    pub instances: Vec<EnrichedCvmInstance>,
-}
+/// Per-app grouping of enriched instances — the `POST /cvms/attestations` response.
+pub type EnrichedCvmSummary = Summary<EnrichedCvmInstance>;

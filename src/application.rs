@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use axum::{Router, http::Method, routing::get};
+use axum::{
+    Router,
+    http::Method,
+    routing::{get, post},
+};
 use tokio::{net::TcpListener, signal};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, info, warn};
@@ -35,13 +39,15 @@ impl Application {
         debug!("Building application router");
 
         let cors = CorsLayer::new()
-            .allow_methods([Method::GET, Method::OPTIONS])
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([axum::http::header::CONTENT_TYPE])
             .allow_origin(tower_http::cors::Any);
 
         Router::new()
             .route("/", get(handlers::root))
             .route("/health", get(handlers::health_check))
             .route("/cvms", get(handlers::get_active_cvms))
+            .route("/cvms/attestations", post(handlers::post_attestations))
             .fallback(handlers::not_found)
             .with_state(state)
             .layer(TraceLayer::new_for_http())

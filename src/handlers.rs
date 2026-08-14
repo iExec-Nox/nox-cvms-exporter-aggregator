@@ -1,10 +1,9 @@
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -12,16 +11,9 @@ use crate::aggregation::merge_cvms;
 use crate::application::AppState;
 use crate::error::AppError;
 use crate::types::{
-    CvmInstance, CvmSummary, EnrichedCvmInstance, EnrichedCvmSummary, ExporterInfo, QuoteResponse,
+    AttestationRequest, CvmInstance, CvmSummary, EnrichedCvmInstance, EnrichedCvmSummary,
+    ExporterInfo, QuoteResponse,
 };
-
-/// Query parameters accepted by `GET /cvms`.
-#[derive(Debug, Deserialize)]
-pub struct CvmsQuery {
-    /// Verifier-generated nonce, relayed to each CVM's `/quote` endpoint so the
-    /// returned quote is bound to it (anti-replay / freshness guarantee).
-    pub challenge: Option<String>,
-}
 
 /// Root endpoint handler.
 ///
@@ -61,6 +53,15 @@ pub async fn not_found(uri: Uri) -> impl IntoResponse {
         StatusCode::NOT_FOUND,
         Json(json!({ "error":format!("Route not found {}", uri.path()) })),
     )
+}
+
+/// Rebuilds a CVM's base URL from its instance id and the per-machine routing
+/// config: `https://<instance_id>-<quote_service_port>.<suffixe_url>`.
+///
+/// The exporter no longer exposes the URL; the aggregator owns URL construction,
+/// keeping the internal CVM address out of both the exporter response and the UI.
+fn build_cvm_url(instance_id: &str, quote_service_port: u16, suffixe_url: &str) -> String {
+    format!("https://{instance_id}-{quote_service_port}.{suffixe_url}")
 }
 
 /// Queries a single `nox-cvms-exporter` instance on its `/cvms` endpoint.
@@ -159,11 +160,12 @@ async fn fetch_app_info(client: &reqwest::Client, base_url: &str) -> Result<Stri
 async fn enrich_instance(
     client: &reqwest::Client,
     challenge: &str,
+    base_url: &str,
     instance: CvmInstance,
 ) -> Option<EnrichedCvmInstance> {
     let (quote, app_compose) = tokio::join!(
-        fetch_quote(client, &instance.url, challenge),
-        fetch_app_info(client, &instance.url),
+        fetch_quote(client, base_url, challenge),
+        fetch_app_info(client, base_url),
     );
 
     match (quote, app_compose) {
@@ -185,31 +187,58 @@ async fn enrich_instance(
     }
 }
 
-/// `GET /cvms?challenge=<nonce>` — returns active CVMs across all configured
-/// exporters, grouped by app, with each instance's quote and compose manifest
-/// embedded so the UI never contacts the CVMs directly.
+/// Enriches a resolved work list — `(app_id, name, instance, base_url)` — with a
+/// bounded number of concurrent fetches (`max_inflight`), then regroups the
+/// survivors by `app_id` (which is also the cross-exporter merge). Instances
+/// whose quote/info fetch fails are dropped (logged) inside `enrich_instance`.
 ///
-/// Queries every configured exporter's `/cvms` endpoint in parallel, merges the
-/// per-machine groups by `app_id`, then fetches each instance's `/quote` (bound
-/// to the caller's `challenge`) and `/info` concurrently. Unreachable or failing
-/// exporters are skipped so a single faulty machine does not abort the whole
-/// aggregation; the request only fails if *every* exporter fails. Instances whose
-/// quote/info fetch fails are dropped from the response (logged).
-///
-/// Requires a non-empty `challenge` query parameter; returns `400` otherwise.
-pub async fn get_active_cvms(
-    State(state): State<AppState>,
-    Query(query): Query<CvmsQuery>,
-) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
-    // 0. A challenge (verifier nonce) is mandatory: it is relayed to each CVM's
-    //    /quote endpoint so the returned quote is bound to the UI's nonce.
-    let challenge = query
-        .challenge
-        .filter(|c| !c.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::BadRequest("missing required query parameter: challenge".to_owned())
-        })?;
+/// Used by `POST /cvms/attestations` once the caller's targets are resolved to
+/// `(app_id, name, instance, base_url)` tuples.
+async fn enrich_and_group(
+    client: &reqwest::Client,
+    challenge: &str,
+    max_inflight: usize,
+    resolved: Vec<(String, String, CvmInstance, String)>,
+) -> Vec<EnrichedCvmSummary> {
+    let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(resolved)
+        .map(|(app_id, name, instance, url)| async move {
+            enrich_instance(client, challenge, &url, instance)
+                .await
+                .map(|ui| (app_id, name, ui))
+        })
+        .buffer_unordered(max_inflight)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
 
+    merge_cvms(
+        enriched
+            .into_iter()
+            .map(|(app_id, name, ui)| EnrichedCvmSummary {
+                app_id,
+                name,
+                instances: vec![ui],
+            }),
+    )
+}
+
+/// Discovers every active instance across all configured exporters.
+///
+/// Queries each exporter's `/cvms` endpoint concurrently and flattens the result
+/// into a flat work list of `(app_id, name, instance)` tuples. Unreachable or
+/// failing exporters are skipped (logged) so a single faulty machine does not
+/// abort discovery; the call only fails when *every* configured exporter fails.
+///
+/// # Note
+///
+/// The `failures > 0` guard is load-bearing: with an empty `exporters` list,
+/// `failures == exporters.len()` would be `0 == 0` and wrongly report an error.
+/// Do not drop it as redundant.
+async fn discover_instances(
+    state: &AppState,
+) -> Result<Vec<(String, String, CvmInstance)>, AppError> {
     // 1. Query every exporter concurrently — we need all responses, not the first.
     let futures = state
         .config
@@ -232,59 +261,121 @@ pub async fn get_active_cvms(
         }
     }
 
-    // 3. Fail only when no exporter answered at all.
-    // The `failures > 0` guard is intentional: if `exporters` is empty,
-    // `failures == exporters.len()` would be `0 == 0` (true) and incorrectly
-    // return an error. Do not remove it as "redundant".
+    // 3. Fail only when no exporter answered at all (guard is load-bearing — see doc).
     if failures > 0 && failures == state.config.exporters.len() {
         return Err(AppError::Internal(
             "all configured exporters failed".to_owned(),
         ));
     }
 
-    // 4. Flatten every instance (carrying its app_id/name) into a single work list.
-    //    No pre-merge here: the final regroup (step 6) subsumes the cross-exporter
-    //    merge, so merging now would only be undone by the flatten.
-    let client = &state.http_client;
-    let challenge = challenge.as_str();
-    let max_inflight = state.config.max_inflight;
-    let flat = summaries.into_iter().flat_map(|summary| {
-        let app_id = summary.app_id;
-        let name = summary.name;
-        summary
-            .instances
-            .into_iter()
-            .map(move |instance| (app_id.clone(), name.clone(), instance))
-    });
-
-    // 5. Enrich instances with a bounded number of concurrent fetches
-    //    (`max_inflight`, from config) rather than firing everything at once.
-    //    Instances whose quote/info fetch fails are dropped inside `enrich_instance`.
-    let enriched: Vec<(String, String, EnrichedCvmInstance)> = stream::iter(flat)
-        .map(|(app_id, name, instance)| async move {
-            enrich_instance(client, challenge, instance)
-                .await
-                .map(|ui| (app_id, name, ui))
-        })
-        .buffer_unordered(max_inflight)
-        .collect::<Vec<_>>()
-        .await
+    // 4. Flatten every instance, carrying its app_id/name.
+    let flat = summaries
         .into_iter()
-        .flatten()
+        .flat_map(|summary| {
+            let app_id = summary.app_id;
+            let name = summary.name;
+            summary
+                .instances
+                .into_iter()
+                .map(move |instance| (app_id.clone(), name.clone(), instance))
+        })
         .collect();
 
-    // 6. Regroup by `app_id` — this fold is also the cross-exporter merge, now on
-    //    the enriched type.
-    let ui_summaries =
-        merge_cvms(
-            enriched
-                .into_iter()
-                .map(|(app_id, name, ui)| EnrichedCvmSummary {
-                    app_id,
-                    name,
-                    instances: vec![ui],
-                }),
-        );
+    Ok(flat)
+}
+
+/// `GET /cvms` — lists active CVMs across all configured exporters, grouped by
+/// `app_id`.
+///
+/// This is a lightweight discovery view: each instance carries only its
+/// `instance_id` and `machine_id`, with **no** attestation data — so the initial
+/// page load stays small. The UI fetches quotes and compose manifests on demand
+/// via `POST /cvms/attestations`.
+///
+/// Unreachable or failing exporters are skipped so a single faulty machine does
+/// not abort the listing; the request only fails if *every* exporter fails.
+pub async fn get_active_cvms(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<CvmSummary>>, AppError> {
+    // 1. Discover every active instance across all exporters.
+    let discovered = discover_instances(&state).await?;
+
+    // 2. Regroup the flat work list by `app_id` (also the cross-exporter merge).
+    let listing = merge_cvms(
+        discovered
+            .into_iter()
+            .map(|(app_id, name, instance)| CvmSummary {
+                app_id,
+                name,
+                instances: vec![instance],
+            }),
+    );
+
+    Ok(Json(listing))
+}
+
+/// `POST /cvms/attestations` — enriches a caller-selected set of instances with
+/// their quote and compose manifest, **without** contacting the exporters.
+///
+/// The UI echoes back instances from a prior `GET /cvms` listing (each carrying
+/// its `instance_id` + `machine_id`) together with a **fresh** `challenge`. For
+/// every target the aggregator rebuilds the CVM base URL from the machine's
+/// configured URL suffix, fetches `/quote?data=<challenge>` and `/info`
+/// concurrently, and returns the results grouped by `app_id`.
+///
+/// The granularity — one instance, all instances of an app, or everything — is
+/// entirely the caller's: it is just how many targets are sent. Targets whose
+/// `machine_id` is absent from the routing config (so cannot be addressed inside
+/// a trusted domain), or whose fetch fails, are dropped (logged).
+///
+/// Requires a non-empty `challenge`; returns `400` otherwise.
+pub async fn post_attestations(
+    State(state): State<AppState>,
+    Json(request): Json<AttestationRequest>,
+) -> Result<Json<Vec<EnrichedCvmSummary>>, AppError> {
+    // 0. A fresh challenge is mandatory (relayed to each CVM's /quote — see doc).
+    if request.challenge.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "missing required field: challenge".to_owned(),
+        ));
+    }
+
+    // 1. Resolve each target's base URL; drop targets whose machine_id isn't
+    //    configured (see doc).
+    let quote_service_port = state.config.quote_service_port;
+    let machine_suffixes = state.config.machine_suffixes();
+    let resolved: Vec<(String, String, CvmInstance, String)> = request
+        .instances
+        .into_iter()
+        .filter_map(
+            |target| match machine_suffixes.get(target.machine_id.as_str()) {
+                Some(suffixe) => {
+                    let url = build_cvm_url(&target.instance_id, quote_service_port, suffixe);
+                    let instance = CvmInstance {
+                        instance_id: target.instance_id,
+                        machine_id: target.machine_id,
+                    };
+                    Some((target.app_id, target.name, instance, url))
+                }
+                None => {
+                    warn!(
+                        "dropping target {}: no url suffix configured for machine_id {}",
+                        target.instance_id, target.machine_id
+                    );
+                    None
+                }
+            },
+        )
+        .collect();
+
+    // 2. Enrich (bounded concurrency) and regroup by `app_id`.
+    let ui_summaries = enrich_and_group(
+        &state.http_client,
+        &request.challenge,
+        state.config.max_inflight,
+        resolved,
+    )
+    .await;
 
     Ok(Json(ui_summaries))
 }
@@ -390,11 +481,10 @@ mod tests {
 
         let instance = CvmInstance {
             instance_id: "i1".to_owned(),
-            url: server.uri(),
             machine_id: "m1".to_owned(),
         };
 
-        let ui = enrich_instance(&reqwest::Client::new(), "abc", instance)
+        let ui = enrich_instance(&reqwest::Client::new(), "abc", &server.uri(), instance)
             .await
             .expect("instance should be enriched");
 
@@ -417,14 +507,57 @@ mod tests {
 
         let instance = CvmInstance {
             instance_id: "i1".to_owned(),
-            url: server.uri(),
             machine_id: "m1".to_owned(),
         };
 
         assert!(
-            enrich_instance(&reqwest::Client::new(), "abc", instance)
+            enrich_instance(&reqwest::Client::new(), "abc", &server.uri(), instance)
                 .await
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_and_group_enriches_and_merges_by_app_id() {
+        let server = MockServer::start().await;
+        mount_quote(&server, "abc").await;
+        mount_info(&server, "compose-yaml").await;
+
+        // Two instances of the same app (different machines) → one merged group.
+        let url = server.uri();
+        let resolved = vec![
+            (
+                "app-1".to_owned(),
+                "alpha".to_owned(),
+                CvmInstance {
+                    instance_id: "i1".to_owned(),
+                    machine_id: "m-a".to_owned(),
+                },
+                url.clone(),
+            ),
+            (
+                "app-1".to_owned(),
+                "alpha".to_owned(),
+                CvmInstance {
+                    instance_id: "i2".to_owned(),
+                    machine_id: "m-b".to_owned(),
+                },
+                url.clone(),
+            ),
+        ];
+
+        let out = enrich_and_group(&reqwest::Client::new(), "abc", 2, resolved).await;
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].app_id, "app-1");
+        assert_eq!(out[0].instances.len(), 2);
+    }
+
+    #[test]
+    fn build_cvm_url_combines_instance_port_and_suffixe() {
+        assert_eq!(
+            build_cvm_url("i-abc", 9999, "node1.apps.example.dev"),
+            "https://i-abc-9999.node1.apps.example.dev"
         );
     }
 

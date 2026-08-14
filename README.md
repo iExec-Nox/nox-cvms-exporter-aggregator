@@ -6,21 +6,26 @@ A lightweight Rust HTTP API (Axum) that aggregates the active Confidential VMs (
 
 Each machine runs its own `nox-cvms-exporter`, which exposes the CVMs active on that machine via `GET /cvms`. When a deployment spans multiple machines, querying each exporter individually is tedious and gives a per-machine view only.
 
-`nox-cvms-exporter-aggregator` queries the `/cvms` endpoint of every configured exporter **in parallel**, then merges the results: groups sharing the same `app_id` are combined into a single entry whose `instances` list concatenates the instances reported by every machine.
+The aggregator exposes the CVM fleet to the attestation UI in **two phases**, so the initial page load stays small:
 
-For each merged instance, the aggregator then fetches the attestation **quote** (bound to a caller-supplied `challenge`) and the **compose manifest** directly from the CVM, and embeds them in the response. As a result, the client (the attestation UI) gets everything it needs to verify a CVM from this single call and never contacts the CVMs directly — the internal CVM `url` is not exposed.
+1. **Listing** — `GET /cvms` queries every configured exporter **in parallel** and merges the results by `app_id` (an app running on several machines becomes a single entry whose `instances` concatenate every machine's instances). The response is lightweight: each instance carries only its `instance_id` and `machine_id` — **no** attestation data.
+2. **On-demand attestation** — `POST /cvms/attestations` takes a caller-selected set of instances (echoed back from the listing) plus a **fresh** `challenge`, fetches each one's quote and compose manifest, and returns them grouped by `app_id`. The UI decides the granularity: one instance, every instance of an app, or all of them.
+
+The aggregator rebuilds each CVM's base URL **internally** — `https://<instance_id>-<quote_service_port>.<suffixe_url>` — from its own config (a global `quote_service_port` plus a `machine_id → suffixe_url` map). The URL is never exposed to the UI, and the UI never contacts the CVMs directly.
 
 ```
-                          ┌──────────────────────────┐
-                   ┌─────►│ nox-cvms-exporter (m-a)  │
-                   │      └──────────────────────────┘
-┌──────────────┐   │      ┌──────────────────────────┐
-│  aggregator  │───┼─────►│ nox-cvms-exporter (m-b)  │
-│   GET /cvms  │   │      └──────────────────────────┘
-└──────────────┘   │      ┌──────────────────────────┐
-                   └─────►│ nox-cvms-exporter (m-c)  │
+   GET /cvms  (listing, no attestation data)
+┌──────────────┐          ┌──────────────────────────┐
+│  aggregator  │────┬────►│ nox-cvms-exporter (m-a)  │
+│              │    ├────►│ nox-cvms-exporter (m-b)  │   queries every exporter
+└──────────────┘    └────►│ nox-cvms-exporter (m-c)  │   concurrently, merges by app_id
                           └──────────────────────────┘
-        (queries every exporter concurrently, merges by app_id)
+
+   POST /cvms/attestations  (on-demand, per caller-selected instance)
+┌──────────────┐          ┌───────────────────────────┐
+│  aggregator  │────┬────►│ CVM quote-service (/quote)│   rebuilds each URL from config,
+│              │    └────►│ CVM quote-service (/info) │   fetches quote + compose manifest
+└──────────────┘          └───────────────────────────┘
 ```
 
 ## Endpoints
@@ -29,21 +34,63 @@ For each merged instance, the aggregator then fetches the attestation **quote** 
 |--------|------|-------------|
 | `GET` | `/` | Service name and current UTC timestamp |
 | `GET` | `/health` | Liveness probe — returns `{"status":"ok"}` |
-| `GET` | `/cvms?challenge=<nonce>` | Aggregated active CVMs across all exporters, with each instance's quote and compose manifest embedded |
+| `GET` | `/cvms` | Lightweight listing of active CVMs across all exporters, merged by `app_id` |
+| `POST` | `/cvms/attestations` | Quote + compose manifest for a caller-selected set of instances |
 
 ### `GET /cvms`
 
-Queries every configured exporter concurrently and returns their active CVMs merged by application. For a given `app_id`, the instances reported by all machines are concatenated into a single entry. Each instance is then enriched with the attestation data fetched from the CVM.
-
-**Query parameters**
-
-| Parameter | Required | Description |
-|---|---|---|
-| `challenge` | yes | Verifier nonce, relayed to each CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
-
-For every merged instance the aggregator fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.
+Queries every configured exporter concurrently and returns their active CVMs merged by application. For a given `app_id`, the instances reported by all machines are concatenated into a single entry. No attestation data is fetched — this is a fast discovery view used to paint the UI.
 
 **Response**
+
+```json
+[
+  {
+    "app_id": "a1b2c3...",
+    "name": "my-app",
+    "instances": [
+      {
+        "instance_id": "i-0abc123",
+        "machine_id": "machine-a"
+      }
+    ]
+  }
+]
+```
+
+**Failure handling**
+
+- An exporter that is unreachable, returns a non-success status, or sends an unparseable body is logged and **skipped** — a single faulty machine does not break the listing.
+- The request fails with `500 Internal Server Error` only when **every** configured exporter fails.
+
+### `POST /cvms/attestations`
+
+Enriches a caller-selected set of instances with their attestation data, **without** re-querying the exporters. The UI echoes back instances from a prior `GET /cvms` listing (each carrying its `instance_id` + `machine_id`), so the granularity is entirely the caller's: one instance, all instances of an app, or everything.
+
+**Request body**
+
+```json
+{
+  "challenge": "<fresh-verifier-nonce>",
+  "instances": [
+    {
+      "app_id": "a1b2c3...",
+      "name": "my-app",
+      "instance_id": "i-0abc123",
+      "machine_id": "machine-a"
+    }
+  ]
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `challenge` | yes | Fresh verifier nonce, relayed to each targeted CVM's `/quote?data=<challenge>` so the returned quote is bound to it (anti-replay / freshness). A missing or empty `challenge` returns `400 Bad Request`. |
+| `instances` | yes | Instances to attest. `instance_id` + `machine_id` address the CVM; `app_id` + `name` are used only to regroup the response. |
+
+For every target the aggregator rebuilds the CVM base URL from the machine's configured URL suffix, then fetches `<url>/quote?data=<challenge>` and `<url>/info` **concurrently**, embedding the quote (`quote` + `event_log`) and the compose manifest (`app_compose`, extracted from the CVM's `tcb_info.app_compose`). The internal CVM `url` is **not** returned.
+
+**Response** — same shape as the listing, with attestation data added per instance and regrouped by `app_id`:
 
 ```json
 [
@@ -67,8 +114,7 @@ For every merged instance the aggregator fetches `<url>/quote?data=<challenge>` 
 
 **Failure handling**
 
-- An exporter that is unreachable, returns a non-success status, or sends an unparseable body is logged and **skipped** — a single faulty machine does not break the aggregation.
-- The request fails with `500 Internal Server Error` only when **every** configured exporter fails.
+- A target whose `machine_id` is **not** in the `machines` config is logged and **dropped**: the aggregator refuses to address a machine outside its own config, which also bounds every rebuilt URL to a trusted domain.
 - An instance whose quote or info fetch fails is logged and **dropped** from the response, so one unreachable CVM does not abort the whole call.
 
 ## Configuration
@@ -81,13 +127,24 @@ Nested keys use `__` as separator (e.g. `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__PO
 | `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__HOST` | `0.0.0.0` | Host to bind the HTTP server to |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_SERVER__PORT` | `8080` | Port to bind the HTTP server to |
 | `NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS` | _(empty)_ | Comma-separated list of exporter base URLs to query |
-| `NOX_CVMS_EXPORTER_AGGREGATOR_REQUEST_TIMEOUT_SECS` | `10` | Per-request timeout, in seconds, when querying an exporter |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_REQUEST_TIMEOUT_SECS` | `10` | Per-request timeout, in seconds, when querying an exporter or a CVM |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_MAX_INFLIGHT` | `2` | Max instances attested concurrently (each issues `/quote` + `/info`) |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_QUOTE_SERVICE_PORT` | `9999` | Port of the quote service exposed by every CVM, used to rebuild CVM URLs |
+| `NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES` | _(empty)_ | Comma-separated `machine_id=suffixe_url` pairs, used to rebuild each CVM's URL as `https://<instance_id>-<quote_service_port>.<suffixe_url>` |
 
 The exporter list accepts plain HTTP or HTTPS URLs, with an optional port:
 
 ```bash
 NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS=https://nox-cvms-exporter.machine-a.example:8080,https://nox-cvms-exporter.machine-b.example:8080
 ```
+
+The `machines` map associates each exporter-reported `machine_id` with the DNS suffix under which that machine's CVMs are reachable:
+
+```bash
+NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES=machine-a=node-a.apps.example.dev,machine-b=node-b.apps.example.dev
+```
+
+An instance whose `machine_id` is missing from this map cannot be addressed and is dropped from attestation responses (logged).
 
 ## Running
 
@@ -99,6 +156,7 @@ Override defaults as needed:
 
 ```bash
 NOX_CVMS_EXPORTER_AGGREGATOR_EXPORTERS=http://10.0.0.1:8080,http://10.0.0.2:8080 \
-NOX_CVMS_EXPORTER_AGGREGATOR_REQUEST_TIMEOUT_SECS=10 \
+NOX_CVMS_EXPORTER_AGGREGATOR_MACHINES=machine-a=node-a.apps.example.dev,machine-b=node-b.apps.example.dev \
+NOX_CVMS_EXPORTER_AGGREGATOR_QUOTE_SERVICE_PORT=9999 \
 cargo run --release
 ```
